@@ -1,93 +1,83 @@
-# CPA Plugin: CodexComp
+# CPA 插件：CodexComp
 
 [![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-[English](README.md) | [简体中文](README_CN.md)
+[简体中文](README.md) | [English](README_EN.md)
 
-A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin that detects and repairs gpt-5.5 reasoning truncation in streaming Responses API requests.
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 插件，用于检测并修复 gpt-5.5 流式 Responses API 请求中的推理截断。
 
-gpt-5.5 in agent scenarios frequently stops reasoning at exactly `518n−2` tokens (516, 1034, 1552, ...) — a model-side scheduling behavior, not a context-window limit. This causes unexpected reasoning degradation. This plugin detects the truncation, continues reasoning via `encrypted_content` replay, and folds multiple rounds into a single response transparent to the downstream client.
+gpt-5.5 在 agent 场景下推理 token 会精确停在 `518n−2`（516、1034、1552……），这是模型侧调度行为，不是上下文窗口限制。这个截断会导致意料之外的降智问题。插件检测到截断后，通过 `encrypted_content` 重放自动续写推理，并将多轮折叠为单个响应，对下游客户端透明。
 
-## Quick Install (Agent)
+## 快速安装（Agent）
 
-If you're using an AI agent (Codex, Claude Code, etc.), send it this prompt:
+如果你使用 AI agent（自动化代理，如 Codex、Claude Code 等），把下面这段提示词发给它：
 
 ```
-Please install the CPA plugin codexcomp for me. Installation instructions are at https://github.com/uf-hy/cpa-plugin-codexcomp/blob/master/SETUP.md — read that document first, then proceed with installation.
+请帮我安装 CPA 插件 codexcomp。安装说明在 https://github.com/uf-hy/cpa-plugin-codexcomp/blob/master/SETUP.md ，请先读取这个文档再执行安装。
 ```
 
-## How It Works
+## 工作原理
 
-1. **Intercept**: The plugin registers as a `model_router` + `executor` via CPA's C ABI plugin system, intercepting `gpt-5.5` streaming Responses API requests.
-2. **Detect**: After each upstream round completes, it checks `reasoning_tokens` against the `518n−2` pattern. If matched and `encrypted_content` is present, a continuation round is triggered.
-3. **Continue**: The continuation round replays the original input plus all previous reasoning items (with `encrypted_content`) and a `phase: commentary` nudge message (`Continue thinking...`). The model resumes from the truncation point instead of restarting.
-4. **Fold**: Up to 3 continuation rounds are attempted. Reasoning events are streamed live to the downstream client. Non-reasoning output (message, tool calls) is buffered per round and only flushed when a clean (non-truncated) round completes.
-5. **Reconstruct**: The final `response.completed` event is rebuilt with merged output, a folded single-response `usage` view (real multi-round billing in `metadata.proxy_billed_usage`), and fold metadata.
+1. **拦截**：插件通过 CPA 的 C ABI 插件系统注册为 `model_router` + `executor`，拦截 `gpt-5.5` 流式 Responses API 请求。
+2. **检测**：每当上游完成一轮后，检查 `reasoning_tokens` 是否匹配 `518n−2` 模式。若匹配且存在 `encrypted_content`，则触发续写。
+3. **续写**：续写轮重放原始 input 加上之前所有 reasoning item（包含 `encrypted_content`）和一条 `phase: commentary` 提示消息（`Continue thinking...`），使模型从截断点继续，而不是重新开始。
+4. **折叠**：默认最多 3 轮续写。思考过程（reasoning）实时流式转发给客户端；非思考输出（message、tool call）按轮缓存，只有等到某一轮没有截断后才发送。
+5. **重建**：最终 `response.completed` 事件被重建，包含合并后的 output、折叠后的单响应 `usage` 视图、真实多轮账单 `metadata.proxy_billed_usage`，以及折叠 metadata。
 
-### Async Streaming & First-Byte Latency
+### 异步流式与首字节延迟
 
-gpt-5.5 with high reasoning effort can take 25-30 seconds before the first SSE event. Many clients (including Codex CLI) timeout at 10 seconds. This plugin uses CPA's async streaming mode: the response header is returned immediately, and a goroutine handles the fold logic. Upstream events are forwarded to the client as soon as they arrive — simple queries see first-byte under 500ms, and complex reasoning gets the first event forwarded immediately once upstream produces it.
+gpt-5.5 high reasoning effort 模式下，模型可能需要 25-30 秒才产生第一个 SSE 事件。很多客户端（包括 Codex CLI）会在 10 秒时超时。插件使用 CPA 的异步流式模式：响应头立即返回，由 goroutine 处理折叠逻辑。上游事件一到就转发给客户端，简单问题首字节实测低于 500ms，复杂推理也会在上游产出第一个事件后立即转发。
 
-## Scope
+## 接管范围
 
-The plugin only intercepts requests that match **all** of:
+插件只拦截**同时满足以下条件**的请求：
 
-- Model is `gpt-5.5`
-- Source format is `openai-response` (Responses API)
-- Request is streaming (`stream: true`)
-- `input` is a JSON array (Codex-style)
-- No `previous_response_id` present
+- 模型为 `gpt-5.5`
+- 源格式为 `openai-response`（Responses API）
+- 流式请求（`stream: true`）
+- `input` 是 JSON 数组（Codex 风格）
+- 不含 `previous_response_id`
 
-All other requests pass through to CPA's normal routing.
+其他请求全部透传给 CPA 正常处理。
 
-## How This Differs From codexcomp / CodexCont
+## 与 codexcomp / CodexCont 的区别
 
-| | [CodexCont](https://github.com/neteroster/CodexCont) | [codexcomp](https://github.com/dzshzx/codexcomp) | This Plugin |
+| | [CodexCont](https://github.com/neteroster/CodexCont) | [codexcomp](https://github.com/dzshzx/codexcomp) | 本插件 |
 |---|---|---|---|
-| **Language** | Python (Starlette/uvicorn) | Python (uv) | Go (C ABI shared library) |
-| **Deployment** | Standalone local proxy (127.0.0.1:8787) | Standalone local proxy (127.0.0.1:8787) | CPA plugin (loaded in-process) |
-| **Integration** | Manual `openai_base_url` rewrite | Manual `openai_base_url` rewrite | Auto-routed by CPA, no config change |
-| **Transport** | HTTP/SSE | WebSocket + SSE fallback | CPA host model stream (`host.model.execute_stream`) |
-| **Recursion guard** | N/A (separate process) | N/A (separate process) | `host_callback_id` skips own router/interceptors |
-| **Concurrency** | Single process | Single process | CPA-managed, plugin goroutine per request |
-| **Config** | `config.toml` | Zero-config (uv tool) | Zero-config (self-registers via C ABI) |
-| **Fold logic** | Original `518n−2` detection + continuation | Refined fold (transport-agnostic) | Go port of codexcomp's `fold.py` |
+| **语言** | Python (Starlette/uvicorn) | Python (uv) | Go (C ABI 共享库) |
+| **部署** | 独立本地代理 (127.0.0.1:8787) | 独立本地代理 (127.0.0.1:8787) | CPA 插件（进程内加载） |
+| **集成** | 手动改 `openai_base_url` | 手动改 `openai_base_url` | CPA 自动路由，无需改配置 |
+| **传输** | HTTP/SSE | WebSocket + SSE 回退 | CPA 宿主模型流（`host.model.execute_stream`） |
+| **递归规避** | 不适用（独立进程） | 不适用（独立进程） | `host_callback_id` 跳过自身路由/拦截器 |
+| **并发** | 单进程 | 单进程 | CPA 管理，每请求一个 goroutine |
+| **配置** | `config.toml` | 零配置（uv tool） | 零配置（C ABI 自注册） |
+| **折叠逻辑** | 最初的 `518n−2` 检测 + 续写 | 改进的折叠（传输无关） | codexcomp `fold.py` 的 Go 移植 |
 
-CodexCont is the original continuation mechanism. codexcomp refined it into a transport-agnostic fold. This plugin ports that fold logic to Go and integrates it directly into CPA's plugin system, eliminating the need for a separate proxy process.
+CodexCont 是最初的续写机制。codexcomp 将其改进为传输无关的折叠。本插件将折叠逻辑移植到 Go 并直接集成到 CPA 插件系统中，无需独立代理进程。
 
-## Manual Installation
+## 手动安装
 
-### Option A: Download prebuilt binary (recommended)
+从 [Releases](https://github.com/uf-hy/cpa-plugin-codexcomp/releases/latest) 下载对应平台的 `.so` 文件：
 
-Download the latest `.so` from [Releases](https://github.com/uf-hy/cpa-plugin-codexcomp/releases/latest):
-
-- `codexcomp-linux-amd64.so` — Linux x86_64 (most common)
+- `codexcomp-linux-amd64.so` — Linux x86_64（最常见）
 - `codexcomp-linux-arm64.so` — Linux ARM64
 
 ```bash
-# Example: download to your CPA plugins directory
+# 按 CPA 运行环境的 CPU 架构二选一。
+# Linux x86_64：
 wget -qO <CPA_DIR>/plugins/codexcomp.so \
   "https://github.com/uf-hy/cpa-plugin-codexcomp/releases/latest/download/codexcomp-linux-amd64.so"
+
+# Linux ARM64：
+wget -qO <CPA_DIR>/plugins/codexcomp.so \
+  "https://github.com/uf-hy/cpa-plugin-codexcomp/releases/latest/download/codexcomp-linux-arm64.so"
 ```
 
-### Option B: Build from source
+启用插件：
 
-Requires Go 1.26+ and CLIProxyAPI source ([latest release](https://github.com/router-for-me/CLIProxyAPI/releases/latest)):
-
-```bash
-git clone https://github.com/uf-hy/cpa-plugin-codexcomp.git
-cd cpa-plugin-codexcomp
-# Fetch the latest CPA release tag automatically
-CPA_TAG=$(curl -s https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest | python3 -c "import sys,json;print(json.load(sys.stdin)['tag_name'])")
-git clone --depth 1 --branch "$CPA_TAG" https://github.com/router-for-me/CLIProxyAPI.git ../CLIProxyAPI
-go build -buildmode=c-shared -o codexcomp.so
-```
-
-### Enable in CPA
-
-1. Copy `codexcomp.so` to `<CPA_DIR>/plugins/`
-2. Enable plugins in `config.yaml`:
+1. 将 `codexcomp.so` 放到 `<CPA_DIR>/plugins/`
+2. 在 `config.yaml` 中启用插件：
 
 ```yaml
 plugins:
@@ -99,34 +89,36 @@ plugins:
       priority: 1
 ```
 
-3. If using Docker, mount the plugins directory in `docker-compose.yml`:
+3. 如果使用 Docker，在 `docker-compose.yml` 中挂载插件目录：
 
 ```yaml
 volumes:
   - ./plugins:/CLIProxyAPI/plugins:ro
 ```
 
-4. Restart CPA.
+4. 重启 CPA。
 
-## Configuration
+更适合 AI agent（自动化代理）的完整步骤见 [SETUP.md](SETUP.md)。
 
-No configuration needed. The plugin self-registers via the C ABI and routes automatically.
+## 配置
 
-## Metadata Injection
+无需额外配置。插件通过 C ABI 自注册，自动路由。
 
-The final `response.completed` event includes:
+## Metadata 注入
 
-- `metadata.proxy_rounds` — per-round info (round number, reasoning tokens, truncation tier `n`)
-- `metadata.proxy_billed_usage` — summed usage across all rounds
-- `metadata.proxy_stopped_reason` — non-empty when the fold stopped for a non-natural reason (`no_encrypted_content`, `max_continue`, `tier_out_of_window`)
+最终 `response.completed` 事件包含：
 
-## Benchmark
+- `metadata.proxy_rounds` — 每轮信息（轮次号、推理 token 数、截断层级 `n`）
+- `metadata.proxy_billed_usage` — 所有轮次的合计用量
+- `metadata.proxy_stopped_reason` — 非自然停止时非空（`no_encrypted_content`、`max_continue`、`tier_out_of_window`）
 
-Tested with the candy problem from [codex-candy-eval](https://github.com/haowang02/codex-candy-eval) — a reasoning depth test that triggers gpt-5.5 truncation. The correct answer is 21.
+## 基准测试
 
-The repo includes a streaming test script `scripts/candy_eval_cpa.py` that sends streaming Responses API requests to your CPA endpoint:
+使用 [codex-candy-eval](https://github.com/haowang02/codex-candy-eval) 的糖果问题——一个触发 gpt-5.5 截断的推理深度测试。正确答案为 21。
 
-**Command**:
+仓库内置了流式测试脚本 `scripts/candy_eval_cpa.py`，直接对你的 CPA 端点发流式 Responses 请求：
+
+**命令**：
 
 ```bash
 python3 scripts/candy_eval_cpa.py \
@@ -134,42 +126,42 @@ python3 scripts/candy_eval_cpa.py \
   --key YOUR_KEY -n 5 -r high
 ```
 
-### Without plugin (baseline)
+### 无插件（baseline）
 
-| Run | Reasoning Tokens | Answer | Correct |
-|-----|-----------------|--------|---------|
-| 1   | 516             | 29     | ✗       |
-| 2   | 516             | 29     | ✗       |
-| 3   | 1552            | 21     | ✓       |
-| 4   | 516             | 29     | ✗       |
-| 5   | 3069            | 21     | ✓       |
+| 运行 | 推理 Token | 答案 | 正确 |
+|------|-----------|------|------|
+| 1    | 516       | 29   | ✗    |
+| 2    | 516       | 29   | ✗    |
+| 3    | 1552      | 21   | ✓    |
+| 4    | 516       | 29   | ✗    |
+| 5    | 3069      | 21   | ✓    |
 
-**Accuracy: 2/5 (40%)** — 3 out of 5 responses were truncated at 516 tokens (n=1), producing wrong answers.
+**准确率：2/5 (40%)** — 5 个响应中有 3 个在 516 token 处截断（n=1），导致答错。
 
-### With plugin
+### 有插件
 
-| Run | Reasoning Tokens | Answer | Correct |
-|-----|-----------------|--------|---------|
-| 1   | 3641            | 21     | ✓       |
-| 2   | 2059            | 21     | ✓       |
-| 3   | 3273            | 21     | ✓       |
-| 4   | 4555            | 21     | ✓       |
-| 5   | 3100            | 21     | ✓       |
+| 运行 | 推理 Token | 答案 | 正确 |
+|------|-----------|------|------|
+| 1    | 3641      | 21   | ✓    |
+| 2    | 2059      | 21   | ✓    |
+| 3    | 3273      | 21   | ✓    |
+| 4    | 4555      | 21   | ✓    |
+| 5    | 3100      | 21   | ✓    |
 
-**Accuracy: 5/5 (100%)** — all truncations were detected and continued, every answer correct.
+**准确率：5/5 (100%)** — 所有截断均被检测并续写，答案全部正确。
 
-## Disclaimer
+## 免责声明
 
-This plugin relies on non-contractual model behavior (the `518n−2` truncation pattern and `encrypted_content` field). If OpenAI changes the truncation pattern or removes `encrypted_content`, the plugin will simply stop firing and become a transparent passthrough. Continuation rounds consume real tokens; the total is recorded in `metadata.proxy_billed_usage`.
+本插件依赖非契约的模型行为（`518n−2` 截断模式和 `encrypted_content` 字段）。如果 OpenAI 改变截断模式或移除 `encrypted_content`，插件将不再触发，变为透明透传。续写轮消耗真实 token，总量记录在 `metadata.proxy_billed_usage` 中。
 
-## Acknowledgments
+## 致谢
 
-- **[CodexCont](https://github.com/neteroster/CodexCont)** (MIT) — the original continuation mechanism that identified the `518n−2` truncation pattern and pioneered the `encrypted_content` replay approach
-- **[codexcomp](https://github.com/dzshzx/codexcomp)** (MIT) — the refined transport-agnostic fold algorithm; this plugin is a direct Go port of its `fold.py`
-- **[codex-candy-eval](https://github.com/haowang02/codex-candy-eval)** — the reasoning depth benchmark used in this README
-- **[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)** — the plugin host framework that makes in-process interception possible
-- **[LINUX DO](https://linux.do)** community — for testing, feedback, and discussion
+- **[CodexCont](https://github.com/neteroster/CodexCont)**（MIT）— 最初的续写机制，识别了 `518n−2` 截断模式并开创了 `encrypted_content` 重放方案
+- **[codexcomp](https://github.com/dzshzx/codexcomp)**（MIT）— 改进的传输无关折叠算法；本插件直接移植自其 `fold.py`
+- **[codex-candy-eval](https://github.com/haowang02/codex-candy-eval)** — 本 README 使用的推理深度基准测试
+- **[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)** — 插件宿主框架，使进程内拦截成为可能
+- **[LINUX DO](https://linux.do)** 社区 — gpt-5.5 “516” 推理截断/降智问题的主要讨论、定位与验证现场；感谢社区成员提供复现样例、部署反馈和测试验证
 
-## License
+## 许可证
 
-MIT. This plugin includes code derived from [CodexCont](https://github.com/neteroster/CodexCont) and [codexcomp](https://github.com/dzshzx/codexcomp). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details.
+MIT。本插件包含来自 [CodexCont](https://github.com/neteroster/CodexCont) 和 [codexcomp](https://github.com/dzshzx/codexcomp) 的派生代码，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

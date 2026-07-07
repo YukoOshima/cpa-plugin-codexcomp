@@ -1,59 +1,63 @@
 # 安装指南（面向 AI Agent）
 
-本指南为 AI agent（Codex、Claude Code 等）编写，用于自动安装 CodexComp CPA 插件。
+本指南为 AI agent（自动化代理，如 Codex、Claude Code 等）编写，用于自动安装 CodexComp CPA 插件。
+
+遇到 `<CPA_DIR>`、`<CPA_URL>`、`<YOUR_KEY>` 这类占位符时，必须先向用户确认真实值，不要猜测路径、端口或密钥。
 
 ## 安装前（可选）：A/B 降智测试
 
-安装插件前，可以先跑一次 [codex-candy-eval](https://github.com/haowang02/codex-candy-eval) 降智测试，记录无插件时的基线表现。安装完成后再跑一次，对比插件效果。
-
-**询问用户**：安装前是否要先跑降智测试记录基线？如果用户同意，执行：
+如果当前机器已经 clone 了本仓库，可以询问用户是否要先跑一次 [codex-candy-eval](https://github.com/haowang02/codex-candy-eval) 降智测试，记录无插件时的基线表现。安装完成后再跑一次，对比插件效果。
 
 ```bash
-python3 scripts/candy_eval_cpa.py --url http://your-cpa:port/v1/responses --key YOUR_KEY -n 5 -r high
+python3 scripts/candy_eval_cpa.py --url <CPA_URL>/v1/responses --key <YOUR_KEY> -n 5 -r high
 ```
 
-保存结果，安装插件后再跑一次对比。如果用户不需要，跳过此步骤。
+如果当前机器只有 CPA 部署目录，没有本仓库和 `scripts/candy_eval_cpa.py`，跳过此步骤。
 
 ## 前置条件
 
-- 一个运行中的 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 实例（需 CGO 编译，建议使用[最新 release](https://github.com/router-for-me/CLIProxyAPI/releases/latest)）
+- 一个运行中的 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 实例（建议使用[最新 release](https://github.com/router-for-me/CLIProxyAPI/releases/latest)）
 - CPA 部署目录的访问权限
-- CPA 的 `config.yaml` 中 `plugins.enabled` 需为 `true`
+- 可以修改 CPA 的 `config.yaml`
+- Linux amd64 或 Linux arm64 运行环境
 
 ## 安装步骤
 
-### 1. 下载成品
+### 1. 确认 CPU 架构并下载成品
 
 ```bash
-# 下载最新 release（根据平台选择）
-# Linux x86_64（最常见）：
-wget -qO /tmp/codexcomp.so "https://github.com/uf-hy/cpa-plugin-codexcomp/releases/latest/download/codexcomp-linux-amd64.so"
+set -euo pipefail
 
-# Linux ARM64：
-wget -qO /tmp/codexcomp.so "https://github.com/uf-hy/cpa-plugin-codexcomp/releases/latest/download/codexcomp-linux-arm64.so"
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64)
+    ASSET="codexcomp-linux-amd64.so"
+    ;;
+  aarch64|arm64)
+    ASSET="codexcomp-linux-arm64.so"
+    ;;
+  *)
+    echo "不支持的 CPU 架构：$ARCH。当前 release 只提供 Linux amd64/arm64 成品。" >&2
+    exit 1
+    ;;
+esac
+
+wget -qO /tmp/codexcomp.so \
+  "https://github.com/uf-hy/cpa-plugin-codexcomp/releases/latest/download/${ASSET}"
+
+test -s /tmp/codexcomp.so
 ```
 
-如果没有匹配的成品，可以从源码编译：
-
-```bash
-git clone https://github.com/uf-hy/cpa-plugin-codexcomp.git
-cd cpa-plugin-codexcomp
-# 自动获取 CPA 最新 release tag
-CPA_TAG=$(curl -s https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest | python3 -c "import sys,json;print(json.load(sys.stdin)['tag_name'])")
-git clone --depth 1 --branch "$CPA_TAG" https://github.com/router-for-me/CLIProxyAPI.git ../CLIProxyAPI
-go build -buildmode=c-shared -o codexcomp.so
-```
-
-### 2. 创建插件目录（如不存在）
+### 2. 创建插件目录
 
 ```bash
 mkdir -p <CPA_DIR>/plugins
 ```
 
-### 3. 复制插件
+### 3. 安装插件文件
 
 ```bash
-cp /tmp/codexcomp.so <CPA_DIR>/plugins/codexcomp.so
+install -m 0644 /tmp/codexcomp.so <CPA_DIR>/plugins/codexcomp.so
 ```
 
 ### 4. 在 config.yaml 中启用插件
@@ -70,7 +74,7 @@ plugins:
       priority: 1
 ```
 
-如果 `plugins.enabled` 已经是 `true`，只需确保 `configs.codexcomp.enabled: true` 存在。
+如果已经有 `plugins` 段，确保 `plugins.enabled: true`，并确保 `configs.codexcomp.enabled: true` 存在。
 
 ### 5. 挂载插件目录（仅 Docker）
 
@@ -93,7 +97,7 @@ systemctl restart cli-proxy-api
 
 ### 7. 验证
 
-通过 CPA 发一个简单的 gpt-5.5 流式请求。如果插件已加载，最终 `response.completed` 事件会包含 `metadata.proxy_rounds`：
+通过 CPA 发一个简单的 gpt-5.5 流式请求。如果插件已加载并接管请求，最终 `response.completed` 事件会包含 `metadata.proxy_rounds`：
 
 ```bash
 curl -sN <CPA_URL>/v1/responses \
@@ -109,12 +113,13 @@ curl -sN <CPA_URL>/v1/responses \
 
 ```bash
 rm <CPA_DIR>/plugins/codexcomp.so
-# 重启 CPA
 cd <CPA_DIR> && docker compose restart
 ```
+
+如果是独立部署，删除插件后改用对应的服务重启命令。
 
 ## 排障
 
 - **插件没加载**：检查 CPA 日志中是否有 `codexcomp` 相关条目。确保 `plugins.enabled: true` 且 `.so` 文件在 `plugins` 目录中。
-- **CGO 未启用**：CPA 必须用 CGO 编译。官方 Docker 镜像 `eceasy/cli-proxy-api:latest` 支持插件。
-- **架构不匹配**：`.so` 必须匹配 CPA 运行时的架构，不是宿主机的架构。Apple Silicon 上跑 Docker 需要用 `linux/amd64` 模拟或编译 `linux/arm64` 版本。
+- **Docker 没挂载插件目录**：确认 `./plugins:/CLIProxyAPI/plugins:ro` 已写入 `docker-compose.yml`，并且宿主机上的 `<CPA_DIR>/plugins/codexcomp.so` 存在。
+- **架构不匹配**：`.so` 必须匹配 CPA 容器或进程的运行时架构，不是宿主机架构。Apple Silicon 上跑 Docker 需要确认容器实际是 `linux/amd64` 还是 `linux/arm64`。
