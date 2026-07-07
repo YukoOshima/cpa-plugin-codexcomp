@@ -43,7 +43,7 @@ func TestTierN(t *testing.T) {
 		{515, nil}, {517, nil}, {0, nil}, {1000, nil},
 	}
 	for _, tt := range tests {
-		got := tierN(&tt.tokens)
+		got := tierNWithStep(&tt.tokens, defaultTruncationStep)
 		if tt.expect == nil && got != nil {
 			t.Errorf("tierN(%d) = %d, want nil", tt.tokens, *got)
 		} else if tt.expect != nil && got == nil {
@@ -55,16 +55,16 @@ func TestTierN(t *testing.T) {
 }
 
 func TestInContinueWindow(t *testing.T) {
-	if !inContinueWindow(intPtr(1)) {
+	if !inContinueWindowWithMax(intPtr(1), defaultMaxTierN) {
 		t.Error("n=1 should be in window")
 	}
-	if !inContinueWindow(intPtr(6)) {
+	if !inContinueWindowWithMax(intPtr(6), defaultMaxTierN) {
 		t.Error("n=6 should be in window")
 	}
-	if inContinueWindow(intPtr(7)) {
+	if inContinueWindowWithMax(intPtr(7), defaultMaxTierN) {
 		t.Error("n=7 should not be in window")
 	}
-	if inContinueWindow(nil) {
+	if inContinueWindowWithMax(nil, defaultMaxTierN) {
 		t.Error("nil should not be in window")
 	}
 }
@@ -183,13 +183,14 @@ func TestShouldContinue(t *testing.T) {
 		terminal:       map[string]any{"type": "response.completed"},
 		usage:          map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": float64(516)}},
 		roundReasoning: []map[string]any{{"encrypted_content": "abc"}},
+		config:         defaultFoldConfig(),
 	}
 	fs.roundNo = 1
 	if !fs.shouldContinue() {
 		t.Error("516 + enc + round 1 should continue")
 	}
 
-	fs.roundNo = maxContinue + 1
+	fs.roundNo = defaultMaxContinue + 1
 	if fs.shouldContinue() {
 		t.Error("should not continue beyond maxContinue")
 	}
@@ -200,6 +201,7 @@ func TestShouldContinueNoEnc(t *testing.T) {
 		terminal:       map[string]any{"type": "response.completed"},
 		usage:          map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": float64(516)}},
 		roundReasoning: []map[string]any{{"type": "reasoning"}},
+		config:         defaultFoldConfig(),
 	}
 	fs.roundNo = 1
 	if fs.shouldContinue() {
@@ -212,6 +214,7 @@ func TestShouldContinueNoTruncation(t *testing.T) {
 		terminal:       map[string]any{"type": "response.completed"},
 		usage:          map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": float64(100)}},
 		roundReasoning: []map[string]any{{"encrypted_content": "abc"}},
+		config:         defaultFoldConfig(),
 	}
 	fs.roundNo = 1
 	if fs.shouldContinue() {
@@ -220,7 +223,7 @@ func TestShouldContinueNoTruncation(t *testing.T) {
 }
 
 func TestShouldContinueNilTerminal(t *testing.T) {
-	fs := &foldState{usage: map[string]any{}}
+	fs := &foldState{usage: map[string]any{}, config: defaultFoldConfig()}
 	fs.roundNo = 1
 	if fs.shouldContinue() {
 		t.Error("nil terminal should not continue")
@@ -232,13 +235,14 @@ func TestStoppedReason(t *testing.T) {
 		terminal:       map[string]any{"type": "response.completed"},
 		usage:          map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": float64(516)}},
 		roundReasoning: []map[string]any{{"type": "reasoning"}},
+		config:         defaultFoldConfig(),
 	}
 	if fs.stoppedReason() != "no_encrypted_content" {
 		t.Errorf("got %s, want no_encrypted_content", fs.stoppedReason())
 	}
 
 	fs.roundReasoning = []map[string]any{{"encrypted_content": "abc"}}
-	fs.roundNo = maxContinue + 1
+	fs.roundNo = defaultMaxContinue + 1
 	if fs.stoppedReason() != "max_continue" {
 		t.Errorf("got %s, want max_continue", fs.stoppedReason())
 	}
@@ -435,7 +439,7 @@ func TestFailedEvent(t *testing.T) {
 }
 
 func TestCommentaryNudge(t *testing.T) {
-	nudge := commentaryNudge()
+	nudge := commentaryNudge("Keep reasoning")
 	if nudge["type"] != "message" {
 		t.Error("type should be message")
 	}
@@ -449,8 +453,121 @@ func TestCommentaryNudge(t *testing.T) {
 	if len(content) != 1 {
 		t.Error("should have 1 content part")
 	}
-	if content[0]["text"] != markerText {
-		t.Error("text should be markerText")
+	if content[0]["text"] != "Keep reasoning" {
+		t.Error("text should use configured marker text")
+	}
+}
+
+func TestCommentaryNudgeDefault(t *testing.T) {
+	for _, input := range []string{"", "   ", "\n\t"} {
+		nudge := commentaryNudge(input)
+		content, _ := nudge["content"].([]map[string]any)
+		if content[0]["text"] != defaultMarkerText {
+			t.Errorf("input %q should fall back to default marker text", input)
+		}
+	}
+}
+
+func TestDecodeFoldConfigMarkerText(t *testing.T) {
+	cfg, err := decodeFoldConfig([]byte("enabled: true\nmarker_text: 'Spend time on thinking; you do not need to use the commentary channel to report progress to me.'\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MarkerText != "Spend time on thinking; you do not need to use the commentary channel to report progress to me." {
+		t.Errorf("unexpected marker_text: %q", cfg.MarkerText)
+	}
+}
+
+func TestApplyLifecycleConfig(t *testing.T) {
+	previous := currentFoldConfig()
+	defer setFoldConfig(previous)
+
+	payload, err := json.Marshal(lifecycleRequest{ConfigYAML: []byte("marker_text: Custom marker\nmax_continue: 5\nmax_tier_n: 8\ntruncation_step: 520\ndebug_log: true")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applyLifecycleConfig(payload); err != nil {
+		t.Fatal(err)
+	}
+	cfg := currentFoldConfig()
+	if cfg.MarkerText != "Custom marker" {
+		t.Errorf("MarkerText = %q", cfg.MarkerText)
+	}
+	if cfg.MaxContinue != 5 {
+		t.Errorf("MaxContinue = %d", cfg.MaxContinue)
+	}
+	if cfg.MaxTierN != 8 {
+		t.Errorf("MaxTierN = %d", cfg.MaxTierN)
+	}
+	if cfg.TruncationStep != 520 {
+		t.Errorf("TruncationStep = %d", cfg.TruncationStep)
+	}
+	if !cfg.DebugLog {
+		t.Error("DebugLog should be true")
+	}
+}
+
+func TestApplyLifecycleConfigEmptyRawInstallsDefaults(t *testing.T) {
+	previous := currentFoldConfig()
+	defer setFoldConfig(previous)
+
+	setFoldConfig(foldConfig{MarkerText: "stale", MaxContinue: 99, MaxTierN: 99, TruncationStep: 999, DebugLog: true})
+	if err := applyLifecycleConfig(nil); err != nil {
+		t.Fatalf("empty raw should not error: %v", err)
+	}
+	cfg := currentFoldConfig()
+	if cfg != defaultFoldConfig() {
+		t.Errorf("empty raw should install defaults, got %+v", cfg)
+	}
+}
+
+func TestDecodeFoldConfigFromJSON(t *testing.T) {
+	cfg, err := decodeFoldConfig([]byte(`{"marker_text":"JSON marker","max_continue":2,"max_tier_n":0,"truncation_step":520,"debug_log":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MarkerText != "JSON marker" || cfg.MaxContinue != 2 || cfg.MaxTierN != 0 || cfg.TruncationStep != 520 || !cfg.DebugLog {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestDecodeFoldConfigRejectsInvalidValues(t *testing.T) {
+	for _, raw := range [][]byte{
+		[]byte("max_continue: -1"),
+		[]byte("max_tier_n: nope"),
+		[]byte("debug_log: maybe"),
+		[]byte("truncation_step: 0"),
+		[]byte("truncation_step: -1"),
+	} {
+		if _, err := decodeFoldConfig(raw); err == nil {
+			t.Fatalf("expected error for %q", string(raw))
+		}
+	}
+}
+
+func TestShouldContinueConfigurableMaxContinue(t *testing.T) {
+	fs := &foldState{
+		terminal:       map[string]any{"type": "response.completed"},
+		usage:          map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": float64(516)}},
+		roundReasoning: []map[string]any{{"encrypted_content": "abc"}},
+		config:         foldConfig{MarkerText: defaultMarkerText, TruncationStep: defaultTruncationStep, MaxTierN: defaultMaxTierN, MaxContinue: 0},
+	}
+	fs.roundNo = 1
+	if fs.shouldContinue() {
+		t.Error("max_continue=0 should disable continuation")
+	}
+}
+
+func TestShouldContinueConfigurableTruncationStep(t *testing.T) {
+	fs := &foldState{
+		terminal:       map[string]any{"type": "response.completed"},
+		usage:          map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": float64(518)}},
+		roundReasoning: []map[string]any{{"encrypted_content": "abc"}},
+		config:         foldConfig{MarkerText: defaultMarkerText, TruncationStep: 520, MaxTierN: defaultMaxTierN, MaxContinue: defaultMaxContinue},
+	}
+	fs.roundNo = 1
+	if !fs.shouldContinue() {
+		t.Error("step=520 should treat 518 as a truncation")
 	}
 }
 

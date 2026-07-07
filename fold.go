@@ -4,16 +4,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // fold constants — mirror codexcomp/fold.py
 const (
-	step        = 518
-	minN        = 1
-	maxN        = 6
-	maxContinue = 3
-	encInclude  = "reasoning.encrypted_content"
-	markerText  = "Continue thinking..."
+	minN       = 1
+	encInclude = "reasoning.encrypted_content"
 )
 
 var terminalTypes = map[string]bool{
@@ -43,10 +40,14 @@ func reasoningTokens(usage map[string]any) *int {
 	return &n
 }
 
-// tierN returns n when tokens == step*n - 2 (516, 1034, 1552, ...), else nil.
-func tierN(tokens *int) *int {
+// tierNWithStep returns n when tokens == step*n - 2 (e.g. 516, 1034, 1552 for step=518), else nil.
+// step must be a positive integer; a non-positive step falls back to defaultTruncationStep.
+func tierNWithStep(tokens *int, step int) *int {
 	if tokens == nil {
 		return nil
+	}
+	if step <= 0 {
+		step = defaultTruncationStep
 	}
 	t := *tokens
 	if t < step-2 || (t+2)%step != 0 {
@@ -56,8 +57,9 @@ func tierN(tokens *int) *int {
 	return &n
 }
 
-// inContinueWindow returns true when n is in [minN, maxN].
-func inContinueWindow(n *int) bool {
+// inContinueWindowWithMax returns true when n is in [minN, maxTierN].
+// A maxTierN of 0 means no upper tier limit.
+func inContinueWindowWithMax(n *int, maxTierN int) bool {
 	if n == nil {
 		return false
 	}
@@ -65,7 +67,7 @@ func inContinueWindow(n *int) bool {
 	if v < minN {
 		return false
 	}
-	if maxN != 0 && v > maxN {
+	if maxTierN != 0 && v > maxTierN {
 		return false
 	}
 	return true
@@ -73,7 +75,11 @@ func inContinueWindow(n *int) bool {
 
 // commentaryNudge builds the phase:"commentary" assistant message that provokes
 // the model to resume reasoning when replayed with encrypted reasoning items.
-func commentaryNudge() map[string]any {
+func commentaryNudge(markerText string) map[string]any {
+	markerText = strings.TrimSpace(markerText)
+	if markerText == "" {
+		markerText = defaultMarkerText
+	}
 	return map[string]any{
 		"type": "message",
 		"role": "assistant",

@@ -187,7 +187,33 @@ func pluginRegistration() registration {
 			Version:          "0.1.0",
 			Author:           "uf-hy",
 			GitHubRepository: "https://github.com/uf-hy/cpa-plugin-codexcomp",
-			ConfigFields:     []pluginapi.ConfigField{},
+			ConfigFields: []pluginapi.ConfigField{
+				{
+					Name:        "marker_text",
+					Type:        pluginapi.ConfigFieldTypeString,
+					Description: "Continuation nudge inserted as a phase: commentary assistant message after a detected reasoning truncation. Defaults to Continue thinking...",
+				},
+				{
+					Name:        "max_continue",
+					Type:        pluginapi.ConfigFieldTypeInteger,
+					Description: "Maximum continuation rounds after detected truncations. Defaults to 3. Set 0 to disable continuation.",
+				},
+				{
+					Name:        "max_tier_n",
+					Type:        pluginapi.ConfigFieldTypeInteger,
+					Description: "Largest step*n-2 truncation tier eligible for continuation, where step is the configured truncation_step. Defaults to 6. Set 0 for no upper tier limit.",
+				},
+				{
+					Name:        "truncation_step",
+					Type:        pluginapi.ConfigFieldTypeInteger,
+					Description: "Token step used to detect the step*n-2 truncation pattern. Defaults to 518.",
+				},
+				{
+					Name:        "debug_log",
+					Type:        pluginapi.ConfigFieldTypeBoolean,
+					Description: "Enable debug logs through CPA host logging. Defaults to false.",
+				},
+			},
 		},
 		Capabilities: registrationCapability{
 			ModelRouter:           true,
@@ -204,6 +230,9 @@ func pluginRegistration() registration {
 func handleMethod(method string, request []byte) ([]byte, error) {
 	switch method {
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
+		if err := applyLifecycleConfig(request); err != nil {
+			return nil, fmt.Errorf("decode plugin config: %w", err)
+		}
 		return okEnvelope(pluginRegistration())
 	case pluginabi.MethodModelRoute:
 		return routeModel(request)

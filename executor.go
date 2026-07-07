@@ -216,6 +216,7 @@ func runFold(baseBody map[string]any, origInput []any, req rpcExecutorRequest, s
 		fs.endRound(terminal, usage)
 
 		if fs.shouldContinue() {
+			fs.debugf("continuing after round=%d reasoning_tokens=%s", fs.roundNo, optionalIntString(reasoningTokens(fs.usage)))
 			fs.prepareNextRound()
 			continue
 		}
@@ -278,6 +279,7 @@ type foldState struct {
 	usage          map[string]any
 
 	sseBuffer []byte
+	config    foldConfig
 }
 
 type bufferedEntry struct {
@@ -295,6 +297,7 @@ func newFoldState(baseBody map[string]any, origInput []any, req rpcExecutorReque
 		summedUsage:    map[string]any{},
 		kind:           map[int]string{},
 		oiToDS:         map[int]int{},
+		config:         currentFoldConfig(),
 	}
 }
 
@@ -590,12 +593,13 @@ func (fs *foldState) endRound(terminal map[string]any, usage map[string]any) {
 	}
 
 	rt := reasoningTokens(usage)
-	n := tierN(rt)
+	n := tierNWithStep(rt, fs.config.TruncationStep)
 	fs.roundsInfo = append(fs.roundsInfo, map[string]any{
 		"round":            fs.roundNo,
 		"reasoning_tokens": rt,
 		"n":                n,
 	})
+	fs.debugf("round=%d completed reasoning_tokens=%s tier=%s", fs.roundNo, optionalIntString(rt), optionalIntString(n))
 }
 
 func (fs *foldState) shouldContinue() bool {
@@ -607,14 +611,14 @@ func (fs *foldState) shouldContinue() bool {
 		return false
 	}
 	rt := reasoningTokens(fs.usage)
-	n := tierN(rt)
-	if !inContinueWindow(n) {
+	n := tierNWithStep(rt, fs.config.TruncationStep)
+	if !inContinueWindowWithMax(n, fs.config.MaxTierN) {
 		return false
 	}
 	if !fs.hasEncryptedContent() {
 		return false
 	}
-	return fs.roundNo <= maxContinue
+	return fs.roundNo <= fs.config.MaxContinue
 }
 
 func (fs *foldState) stoppedReason() string {
@@ -623,14 +627,14 @@ func (fs *foldState) stoppedReason() string {
 		return ""
 	}
 	rt := reasoningTokens(fs.usage)
-	n := tierN(rt)
+	n := tierNWithStep(rt, fs.config.TruncationStep)
 	if n == nil {
 		return ""
 	}
 	if !fs.hasEncryptedContent() {
 		return "no_encrypted_content"
 	}
-	if fs.roundNo > maxContinue {
+	if fs.roundNo > fs.config.MaxContinue {
 		return "max_continue"
 	}
 	return "tier_out_of_window"
@@ -650,8 +654,22 @@ func (fs *foldState) prepareNextRound() {
 	for _, r := range fs.roundReasoning {
 		tail = append(tail, r)
 	}
-	tail = append(tail, commentaryNudge())
+	tail = append(tail, commentaryNudge(fs.config.MarkerText))
 	fs.replayTail = append(fs.replayTail, tail...)
+}
+
+func (fs *foldState) debugf(format string, args ...any) {
+	if !fs.config.DebugLog {
+		return
+	}
+	pluginLog("debug", fmt.Sprintf(format, args...))
+}
+
+func optionalIntString(value *int) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d", *value)
 }
 
 func (fs *foldState) flushCleanStop(streamID string) error {

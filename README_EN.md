@@ -51,7 +51,7 @@ All other requests pass through to CPA's normal routing.
 | **Transport** | HTTP/SSE | WebSocket + SSE fallback | CPA host model stream (`host.model.execute_stream`) |
 | **Recursion guard** | N/A (separate process) | N/A (separate process) | `host_callback_id` skips own router/interceptors |
 | **Concurrency** | Single process | Single process | CPA-managed, plugin goroutine per request |
-| **Config** | `config.toml` | Zero-config (uv tool) | Zero-config (self-registers via C ABI) |
+| **Config** | `config.toml` | Zero-config (uv tool) | Zero-config by default, optional debug knobs (self-registers via C ABI) |
 | **Fold logic** | Original `518n−2` detection + continuation | Refined fold (transport-agnostic) | Go port of codexcomp's `fold.py` |
 
 CodexCont is the original continuation mechanism. codexcomp refined it into a transport-agnostic fold. This plugin ports that fold logic to Go and integrates it directly into CPA's plugin system, eliminating the need for a separate proxy process.
@@ -102,7 +102,30 @@ For AI-agent-friendly installation steps, see [SETUP.md](SETUP.md).
 
 ## Configuration
 
-No extra configuration needed. The plugin self-registers via the C ABI and routes automatically.
+No extra configuration is required by default. The plugin self-registers via the C ABI and routes automatically. For A/B testing or troubleshooting, these knobs are available.
+
+```yaml
+plugins:
+  configs:
+    codexcomp:
+      marker_text: "Spend time on thinking; you do not need to use the commentary channel to report progress to me."
+      max_continue: 3
+      max_tier_n: 6
+      truncation_step: 518
+      debug_log: false
+```
+
+`marker_text` is the continuation nudge inserted after a detected truncation. The default remains `Continue thinking...`.
+
+`max_continue` is the maximum number of continuation rounds. It defaults to 3. Set it to 0 to temporarily disable continuation while keeping routing and metadata visible for comparisons.
+
+`max_tier_n` is the largest truncation tier eligible for continuation. It defaults to 6. Set it to 0 to remove the upper tier limit.
+
+`truncation_step` is the step used to detect the `step*n−2` truncation pattern. It defaults to 518. Do not change it unless new samples show a stable different step.
+
+`debug_log` emits configuration and continuation-round details through CPA host log. It defaults to false and is intended for troubleshooting.
+
+The marker text above comes from related discussion in [openai/codex#30364](https://github.com/openai/codex/issues/30364#issuecomment-4828984707). It more explicitly asks the model to spend time on thinking and not use the commentary channel for progress reports. Its effect may vary across clients and tasks, so test it in your own workload before enabling it.
 
 ## Metadata Injection
 

@@ -72,6 +72,16 @@ plugins:
     codexcomp:
       enabled: true
       priority: 1
+      # 可选：自定义截断后的续写提示。不配置时默认是 Continue thinking...
+      # marker_text: "Spend time on thinking; you do not need to use the commentary channel to report progress to me."
+      # 可选：最多续写轮数。默认 3；设为 0 可临时禁用续写做 A/B 对比。
+      # max_continue: 3
+      # 可选：最大截断层级。默认 6；设为 0 表示不限制上限。
+      # max_tier_n: 6
+      # 可选：截断检测步长。默认 518；没有新样本证据时不建议修改。
+      # truncation_step: 518
+      # 可选：输出调试日志到 CPA host log。默认 false，排障时再开。
+      # debug_log: false
 ```
 
 如果已经有 `plugins` 段，确保 `plugins.enabled: true`，并确保 `configs.codexcomp.enabled: true` 存在。
@@ -123,3 +133,4 @@ cd <CPA_DIR> && docker compose restart
 - **插件没加载**：检查 CPA 日志中是否有 `codexcomp` 相关条目。确保 `plugins.enabled: true` 且 `.so` 文件在 `plugins` 目录中。
 - **Docker 没挂载插件目录**：确认 `./plugins:/CLIProxyAPI/plugins:ro` 已写入 `docker-compose.yml`，并且宿主机上的 `<CPA_DIR>/plugins/codexcomp.so` 存在。
 - **架构不匹配**：`.so` 必须匹配 CPA 容器或进程的运行时架构，不是宿主机架构。Apple Silicon 上跑 Docker 需要确认容器实际是 `linux/amd64` 还是 `linux/arm64`。
+- **想看续写是否触发**：临时设置 `debug_log: true`，重启 CPA 后查看 CPA 日志。最终响应里也会有 `metadata.proxy_rounds`、`metadata.proxy_billed_usage` 和可能的 `metadata.proxy_stopped_reason`。
