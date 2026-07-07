@@ -1,28 +1,33 @@
 # CPA 插件：CodexComp
 
+[![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go)](https://go.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+[English](README.md) | [简体中文](README_CN.md)
+
 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 插件，检测并修复 gpt-5.5 流式 Responses API 请求中的推理截断。
 
-gpt-5.5 在 agent 场景下推理 token 会精确停在 `518n−2`（516、1034、1552……），这个截断会导致意料之外的降智问题。使用插件检测到该种截断后，通过 `encrypted_content` 重放自动续写推理，并将多轮折叠为单个响应，对下游客户端完全透明。
-
-同时缓解了首字节超时问题：gpt-5.5 high effort 模式下模型可能思考 25-30 秒才出第一个事件，部分客户端（如 OpenCode）10 秒就超时断开了。插件用异步流式模式，响应头立刻返回，上游第一个事件到达后即刻转发——简单问题实测首字节 < 500ms，复杂推理问题的第一个 reasoning 事件也会在上游产出后立即转发。
+gpt-5.5 在 agent 场景下推理 token 会精确停在 `518n−2`（516、1034、1552……），这是模型侧调度行为，不是上下文窗口限制。这个截断会导致意料之外的降智问题。使用插件检测到该种截断后，通过 `encrypted_content` 重放自动续写推理，并将多轮折叠为单个响应，对下游客户端完全透明。
 
 ## 快速安装（Agent）
 
 如果你使用 AI agent（Codex、Claude Code 等），把以下提示词发给它：
 
 ```
-请帮我安装 CPA 插件 codexcomp。安装说明在 https://github.com/uf-hy/cpa-plugin-codexcomp/blob/main/SETUP.md ，请先读取这个文档再执行安装。
+请帮我安装 CPA 插件 codexcomp。安装说明在 https://github.com/uf-hy/cpa-plugin-codexcomp/blob/master/SETUP.md ，请先读取这个文档再执行安装。
 ```
 
 ## 工作原理
 
-插件通过 CPA 的 C ABI 插件系统拦截 `gpt-5.5` 流式 Responses API 请求，每当上游完成后检查 `reasoning_tokens` 是否匹配 `518n−2` 模式。若匹配且存在 `encrypted_content`，则触发续写。
+1. **拦截**：插件通过 CPA 的 C ABI 插件系统注册为 `model_router` + `executor`，拦截 `gpt-5.5` 流式 Responses API 请求。
+2. **检测**：每当上游完成一轮后，检查 `reasoning_tokens` 是否匹配 `518n−2` 模式。若匹配且存在 `encrypted_content`，则触发续写。
+3. **续写**：续写轮重放原始 input 加上之前所有 reasoning item（包含 `encrypted_content`）和一条 `phase: commentary` 提示消息（`Continue thinking...`），使模型从截断点继续，而不是重新开始。
+4. **折叠**：默认最多 3 轮续写。思考过程（reasoning）实时流式转发给客户端；非思考输出（message、tool call）按轮缓存，只有等到某一轮没有截断后才发送。
+5. **重建**：最终 `response.completed` 事件被重建，包含合并后的 output、折叠后的单响应 `usage` 视图、真实多轮账单 `metadata.proxy_billed_usage`，以及折叠 metadata。
 
-续写轮重放原始 input 加上之前所有思考内容和一条提示消息，使得模型从截断点继续而非重来。默认最多 3 轮续写。
+### 异步流式与首字节延迟
 
-关于输出怎么交给客户端：思考过程（reasoning）实时流式转发，客户端能看到完整的推理过程。但最终答案（message、tool call）先扣着不发——因为截断轮的答案是不完整的。只有等到某一轮没被截断（"干净轮"），才把那轮的答案发给客户端。
-
-最终 `response.completed` 事件被重建：response id 用第一轮的，output 合并所有轮的，`usage` 是折叠后的单响应视图，真实多轮账单记录在 `metadata.proxy_billed_usage` 中。metadata 里还写入每轮信息。
+gpt-5.5 high reasoning effort 模式下，模型可能需要 25-30 秒才产生第一个 SSE 事件。很多客户端（包括 Codex CLI）会在 10 秒时超时。插件使用 CPA 的异步流式模式：响应头立即返回，由 goroutine 处理折叠逻辑。上游事件一到就转发给客户端，简单问题首字节实测低于 500ms，复杂推理也会在上游产出第一个事件后立即转发。
 
 ## 接管范围
 

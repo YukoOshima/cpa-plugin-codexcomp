@@ -1,8 +1,21 @@
 # CPA Plugin: CodexComp
 
+[![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go)](https://go.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+[English](README.md) | [简体中文](README_CN.md)
+
 A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin that detects and repairs gpt-5.5 reasoning truncation in streaming Responses API requests.
 
 gpt-5.5 in agent scenarios frequently stops reasoning at exactly `518n−2` tokens (516, 1034, 1552, ...) — a model-side scheduling behavior, not a context-window limit. This causes unexpected reasoning degradation. This plugin detects the truncation, continues reasoning via `encrypted_content` replay, and folds multiple rounds into a single response transparent to the downstream client.
+
+## Quick Install (Agent)
+
+If you're using an AI agent (Codex, Claude Code, etc.), send it this prompt:
+
+```
+Please install the CPA plugin codexcomp for me. Installation instructions are at https://github.com/uf-hy/cpa-plugin-codexcomp/blob/master/SETUP.md — read that document first, then proceed with installation.
+```
 
 ## How It Works
 
@@ -43,7 +56,7 @@ All other requests pass through to CPA's normal routing.
 
 CodexCont is the original continuation mechanism. codexcomp refined it into a transport-agnostic fold. This plugin ports that fold logic to Go and integrates it directly into CPA's plugin system, eliminating the need for a separate proxy process.
 
-## Installation
+## Manual Installation
 
 ### Option A: Download prebuilt binary (recommended)
 
@@ -94,14 +107,6 @@ volumes:
 ```
 
 4. Restart CPA.
-
-### Agent-guided installation
-
-If you're using an AI agent (Codex, Claude Code, etc.), send it this prompt:
-
-```
-Please install the CPA plugin codexcomp for me. Installation instructions are at https://github.com/uf-hy/cpa-plugin-codexcomp/blob/main/SETUP.md — read that document first, then proceed with installation.
-```
 
 ## Configuration
 
