@@ -40,26 +40,22 @@ func reasoningTokens(usage map[string]any) *int {
 	return &n
 }
 
-// tierNWithStep returns n when tokens == step*n - 2 (e.g. 516, 1034, 1552 for step=518), else nil.
-// step must be a positive integer; a non-positive step falls back to defaultTruncationStep.
-func tierNWithStep(tokens *int, step int) *int {
+// tierN returns n when tokens == 518*n - 2 (516, 1034, 1552, ...), else nil.
+func tierN(tokens *int) *int {
 	if tokens == nil {
 		return nil
 	}
-	if step <= 0 {
-		step = defaultTruncationStep
-	}
 	t := *tokens
-	if t < step-2 || (t+2)%step != 0 {
+	if t < defaultTruncationStep-2 || (t+2)%defaultTruncationStep != 0 {
 		return nil
 	}
-	n := (t + 2) / step
+	n := (t + 2) / defaultTruncationStep
 	return &n
 }
 
-// inContinueWindowWithMax returns true when n is in [minN, maxTierN].
+// inContinueWindow returns true when n is in [minN, maxTierN].
 // A maxTierN of 0 means no upper tier limit.
-func inContinueWindowWithMax(n *int, maxTierN int) bool {
+func inContinueWindow(n *int, maxTierN int) bool {
 	if n == nil {
 		return false
 	}

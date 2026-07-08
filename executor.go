@@ -598,7 +598,7 @@ func (fs *foldState) endRound(terminal map[string]any, usage map[string]any) {
 	}
 
 	rt := reasoningTokens(usage)
-	n := tierNWithStep(rt, fs.config.TruncationStep)
+	n := tierN(rt)
 	fs.roundsInfo = append(fs.roundsInfo, map[string]any{
 		"round":            fs.roundNo,
 		"reasoning_tokens": rt,
@@ -616,8 +616,8 @@ func (fs *foldState) shouldContinue() bool {
 		return false
 	}
 	rt := reasoningTokens(fs.usage)
-	n := tierNWithStep(rt, fs.config.TruncationStep)
-	if !inContinueWindowWithMax(n, fs.config.MaxTierN) {
+	n := tierN(rt)
+	if !inContinueWindow(n, fs.config.MaxTierN) {
 		return false
 	}
 	if !fs.hasEncryptedContent() {
@@ -632,7 +632,7 @@ func (fs *foldState) stoppedReason() string {
 		return ""
 	}
 	rt := reasoningTokens(fs.usage)
-	n := tierNWithStep(rt, fs.config.TruncationStep)
+	n := tierN(rt)
 	if n == nil {
 		return ""
 	}

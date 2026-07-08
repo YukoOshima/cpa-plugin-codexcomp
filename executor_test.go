@@ -43,7 +43,7 @@ func TestTierN(t *testing.T) {
 		{515, nil}, {517, nil}, {0, nil}, {1000, nil},
 	}
 	for _, tt := range tests {
-		got := tierNWithStep(&tt.tokens, defaultTruncationStep)
+		got := tierN(&tt.tokens)
 		if tt.expect == nil && got != nil {
 			t.Errorf("tierN(%d) = %d, want nil", tt.tokens, *got)
 		} else if tt.expect != nil && got == nil {
@@ -55,16 +55,16 @@ func TestTierN(t *testing.T) {
 }
 
 func TestInContinueWindow(t *testing.T) {
-	if !inContinueWindowWithMax(intPtr(1), defaultMaxTierN) {
+	if !inContinueWindow(intPtr(1), defaultMaxTierN) {
 		t.Error("n=1 should be in window")
 	}
-	if !inContinueWindowWithMax(intPtr(6), defaultMaxTierN) {
+	if !inContinueWindow(intPtr(6), defaultMaxTierN) {
 		t.Error("n=6 should be in window")
 	}
-	if inContinueWindowWithMax(intPtr(7), defaultMaxTierN) {
+	if inContinueWindow(intPtr(7), defaultMaxTierN) {
 		t.Error("n=7 should not be in window")
 	}
-	if inContinueWindowWithMax(nil, defaultMaxTierN) {
+	if inContinueWindow(nil, defaultMaxTierN) {
 		t.Error("nil should not be in window")
 	}
 }
@@ -482,7 +482,7 @@ func TestApplyLifecycleConfig(t *testing.T) {
 	previous := currentFoldConfig()
 	defer setFoldConfig(previous)
 
-	payload, err := json.Marshal(lifecycleRequest{ConfigYAML: []byte("marker_text: Custom marker\nmax_continue: 5\nmax_tier_n: 8\ntruncation_step: 520\ndebug_log: true")})
+	payload, err := json.Marshal(lifecycleRequest{ConfigYAML: []byte("marker_text: Custom marker\nmax_continue: 5\nmax_tier_n: 8\ndebug_log: true")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,9 +499,6 @@ func TestApplyLifecycleConfig(t *testing.T) {
 	if cfg.MaxTierN != 8 {
 		t.Errorf("MaxTierN = %d", cfg.MaxTierN)
 	}
-	if cfg.TruncationStep != 520 {
-		t.Errorf("TruncationStep = %d", cfg.TruncationStep)
-	}
 	if !cfg.DebugLog {
 		t.Error("DebugLog should be true")
 	}
@@ -511,7 +508,7 @@ func TestApplyLifecycleConfigEmptyRawInstallsDefaults(t *testing.T) {
 	previous := currentFoldConfig()
 	defer setFoldConfig(previous)
 
-	setFoldConfig(foldConfig{MarkerText: "stale", MaxContinue: 99, MaxTierN: 99, TruncationStep: 999, DebugLog: true})
+	setFoldConfig(foldConfig{MarkerText: "stale", MaxContinue: 99, MaxTierN: 99, DebugLog: true})
 	if err := applyLifecycleConfig(nil); err != nil {
 		t.Fatalf("empty raw should not error: %v", err)
 	}
@@ -522,11 +519,11 @@ func TestApplyLifecycleConfigEmptyRawInstallsDefaults(t *testing.T) {
 }
 
 func TestDecodeFoldConfigFromJSON(t *testing.T) {
-	cfg, err := decodeFoldConfig([]byte(`{"marker_text":"JSON marker","max_continue":2,"max_tier_n":0,"truncation_step":520,"debug_log":true}`))
+	cfg, err := decodeFoldConfig([]byte(`{"marker_text":"JSON marker","max_continue":2,"max_tier_n":0,"debug_log":true}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.MarkerText != "JSON marker" || cfg.MaxContinue != 2 || cfg.MaxTierN != 0 || cfg.TruncationStep != 520 || !cfg.DebugLog {
+	if cfg.MarkerText != "JSON marker" || cfg.MaxContinue != 2 || cfg.MaxTierN != 0 || !cfg.DebugLog {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
@@ -536,8 +533,6 @@ func TestDecodeFoldConfigRejectsInvalidValues(t *testing.T) {
 		[]byte("max_continue: -1"),
 		[]byte("max_tier_n: nope"),
 		[]byte("debug_log: maybe"),
-		[]byte("truncation_step: 0"),
-		[]byte("truncation_step: -1"),
 	} {
 		if _, err := decodeFoldConfig(raw); err == nil {
 			t.Fatalf("expected error for %q", string(raw))
@@ -550,24 +545,11 @@ func TestShouldContinueConfigurableMaxContinue(t *testing.T) {
 		terminal:       map[string]any{"type": "response.completed"},
 		usage:          map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": float64(516)}},
 		roundReasoning: []map[string]any{{"encrypted_content": "abc"}},
-		config:         foldConfig{MarkerText: defaultMarkerText, TruncationStep: defaultTruncationStep, MaxTierN: defaultMaxTierN, MaxContinue: 0},
+		config:         foldConfig{MarkerText: defaultMarkerText, MaxTierN: defaultMaxTierN, MaxContinue: 0},
 	}
 	fs.roundNo = 1
 	if fs.shouldContinue() {
 		t.Error("max_continue=0 should disable continuation")
-	}
-}
-
-func TestShouldContinueConfigurableTruncationStep(t *testing.T) {
-	fs := &foldState{
-		terminal:       map[string]any{"type": "response.completed"},
-		usage:          map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": float64(518)}},
-		roundReasoning: []map[string]any{{"encrypted_content": "abc"}},
-		config:         foldConfig{MarkerText: defaultMarkerText, TruncationStep: 520, MaxTierN: defaultMaxTierN, MaxContinue: defaultMaxContinue},
-	}
-	fs.roundNo = 1
-	if !fs.shouldContinue() {
-		t.Error("step=520 should treat 518 as a truncation")
 	}
 }
 
@@ -1294,7 +1276,7 @@ func TestRouteModelDeclinesNonMatching(t *testing.T) {
 		stream              bool
 	}{
 		{"wrong model", "gpt-4o", "openai-response", true},
-		{"wrong format", "gpt-5.5", "openai-chat", true},
+		{"unsupported format", "gpt-5.5", "gemini", true},
 		{"non-stream", "gpt-5.5", "openai-response", false},
 	}
 	for _, tt := range tests {
@@ -1349,6 +1331,44 @@ func TestRouteModelAccepts(t *testing.T) {
 	}
 	if resp.Data.Reason != "codexcomp_gpt55_truncation_fold" {
 		t.Error("reason mismatch")
+	}
+}
+
+func TestRouteModelAcceptsOpenAIChat(t *testing.T) {
+	body := `{"model":"gpt-5.5","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	req := rpcModelRouteRequest{
+		ModelRouteRequest: pluginapi.ModelRouteRequest{
+			RequestedModel: "gpt-5.5", SourceFormat: "openai",
+			Stream: true, Body: []byte(body),
+		},
+	}
+	raw, _ := json.Marshal(req)
+	result, _ := routeModel(raw)
+	var resp struct {
+		Data pluginapi.ModelRouteResponse `json:"result"`
+	}
+	json.Unmarshal(result, &resp)
+	if !resp.Data.Handled {
+		t.Error("should accept openai (chat completions) for gpt-5.5")
+	}
+}
+
+func TestRouteModelAcceptsClaude(t *testing.T) {
+	body := `{"model":"gpt-5.5","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	req := rpcModelRouteRequest{
+		ModelRouteRequest: pluginapi.ModelRouteRequest{
+			RequestedModel: "gpt-5.5", SourceFormat: "claude",
+			Stream: true, Body: []byte(body),
+		},
+	}
+	raw, _ := json.Marshal(req)
+	result, _ := routeModel(raw)
+	var resp struct {
+		Data pluginapi.ModelRouteResponse `json:"result"`
+	}
+	json.Unmarshal(result, &resp)
+	if !resp.Data.Handled {
+		t.Error("should accept claude for gpt-5.5")
 	}
 }
 

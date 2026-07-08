@@ -17,6 +17,8 @@ If you're using an AI agent (Codex, Claude Code, etc.), send it this prompt:
 Please install the CPA plugin codexcomp for me. Installation instructions are at https://github.com/uf-hy/cpa-plugin-codexcomp/blob/master/SETUP.md — read that document first, then proceed with installation.
 ```
 
+For manual installation by humans, see [Installation](#installation).
+
 ## How It Works
 
 The plugin intercepts gpt-5.5 streaming requests through CPA's C ABI plugin system, communicating with the upstream in codex format internally. Each time the upstream request finishes, it checks whether reasoning_tokens matches the 518n−2 pattern. If it matches and encrypted_content exists, it triggers continuation
@@ -37,6 +39,7 @@ The plugin only intercepts requests that match **all** of:
 - Client protocol is `openai-response` (Responses API), `openai` (Chat Completions API), or `claude` (Anthropic Messages API)
 - Request is streaming (`stream: true`)
 - No `previous_response_id` present
+- `input` is an array (only required for `openai-response` protocol; string `input` passes through unchanged, no continuation triggered)
 
 The plugin communicates with the upstream exclusively in codex format. CPA's adapter layer automatically handles bidirectional translation between the client protocol and codex, making the fold transparent to downstream clients. All other requests pass through to CPA's normal routing.
 
@@ -57,34 +60,22 @@ CodexCont is the original continuation mechanism. codexcomp refined it into a tr
 
 ## Installation
 
-### Option 1: Plugin Store (recommended)
+### Option 1: CPA WebUI (recommended)
 
-Add this repository as a third-party plugin source and install via the management API:
+Add this repository as a plugin source in CPA's WebUI:
 
-1. Add `store-sources` to the `plugins` section of `config.yaml`:
+1. Open **Config Panel → Visual Editor → Full → Advanced & Experimental → Plugins**
+2. Ensure the plugin system is enabled
+3. Under "Third-party Plugin Sources", click "Add" and enter:
 
-```yaml
-plugins:
-  enabled: true
-  dir: plugins
-  store-sources:
-    - "https://raw.githubusercontent.com/uf-hy/cpa-plugin-codexcomp/master/registry.json"
-  configs:
-    codexcomp:
-      enabled: true
-      priority: 1
+```
+https://raw.githubusercontent.com/uf-hy/cpa-plugin-codexcomp/master/registry.json
 ```
 
-2. Restart CPA
+4. Click the checkmark at the bottom to save and hot-reload
+5. Find CodexComp in the plugin store page (use search if needed), and click install
 
-3. Call the install endpoint:
-
-```bash
-curl -X POST "<CPA_URL>/v0/management/plugin-store/codexcomp/install" \
-  -H "Authorization: Bearer <MANAGEMENT_KEY>"
-```
-
-CPA will download the correct architecture `.so`, verify SHA256, and hot-reload — usually no second restart needed.
+CPA will download the correct architecture `.so`, verify SHA256, and hot-reload — usually no second restart needed. Enjoy it!
 
 ### Option 2: Manual Installation
 
@@ -92,7 +83,7 @@ Download the latest zip from [Releases](https://github.com/uf-hy/cpa-plugin-code
 
 ```bash
 mkdir -p <CPA_DIR>/plugins
-unzip codexcomp_<version>_linux_<amd64|arm64>.zip -d <CPA_DIR>/plugins/
+unzip -o codexcomp_<version>_linux_<amd64|arm64>.zip -d <CPA_DIR>/plugins/
 ```
 
 Enable the plugin in `config.yaml`:
@@ -118,6 +109,15 @@ Restart CPA.
 
 For AI-agent-friendly installation steps, see [SETUP.md](SETUP.md).
 
+### Building from Source
+
+The `go.mod` has a `replace` directive pointing to an adjacent CLIProxyAPI directory. Clone the dependency first:
+
+```bash
+git clone https://github.com/router-for-me/CLIProxyAPI.git ../CLIProxyAPI
+go build -buildmode=c-shared -o codexcomp.so .
+```
+
 ## Configuration
 
 No extra configuration is required by default. The plugin self-registers via the C ABI and routes automatically. For A/B testing or troubleshooting, these knobs are available.
@@ -126,24 +126,21 @@ No extra configuration is required by default. The plugin self-registers via the
 plugins:
   configs:
     codexcomp:
-      marker_text: "Spend time on thinking; you do not need to use the commentary channel to report progress to me."
+      marker_text: "Continue thinking..."
       max_continue: 3
       max_tier_n: 6
-      truncation_step: 518
       debug_log: false
 ```
 
-`marker_text` is the continuation nudge inserted after a detected truncation. The default remains `Continue thinking...`.
+`marker_text` is the continuation nudge inserted after a detected truncation. The default is `Continue thinking...`.
 
 `max_continue` is the maximum number of continuation rounds. It defaults to 3. Set it to 0 to temporarily disable continuation while keeping routing and metadata visible for comparisons.
 
 `max_tier_n` is the largest truncation tier eligible for continuation. It defaults to 6. Set it to 0 to remove the upper tier limit.
 
-`truncation_step` is the step used to detect the `step*n−2` truncation pattern. It defaults to 518. Do not change it unless new samples show a stable different step.
-
 `debug_log` emits configuration and continuation-round details through CPA host log. It defaults to false and is intended for troubleshooting.
 
-The marker text above comes from related discussion in [openai/codex#30364](https://github.com/openai/codex/issues/30364#issuecomment-4828984707). It more explicitly asks the model to spend time on thinking and not use the commentary channel for progress reports. Its effect may vary across clients and tasks, so test it in your own workload before enabling it.
+For a more aggressive nudge, see [openai/codex#30364](https://github.com/openai/codex/issues/30364#issuecomment-4828984707). Setting `marker_text` to `Spend time on thinking; you do not need to use the commentary channel to report progress to me.` more explicitly asks the model to spend time on thinking and not use the commentary channel for progress reports. Its effect may vary across clients and tasks, so test it in your own workload before enabling it.
 
 ## Metadata Injection
 
@@ -153,18 +150,20 @@ The final `response.completed` event includes:
 - `metadata.proxy_billed_usage` — summed usage across all rounds
 - `metadata.proxy_stopped_reason` — non-empty when the fold stopped for a non-natural reason (`no_encrypted_content`, `max_continue`, `tier_out_of_window`)
 
+> **Note**: The metadata fields above are only guaranteed visible under the `openai-response` (Responses API) protocol. For `openai` (Chat Completions API) and `claude` (Anthropic Messages API) protocols, CPA's protocol translation layer does not forward the metadata from `response.completed`, so clients cannot access `proxy_rounds` and related fields. The continuation logic itself works correctly across all protocols — only the diagnostic metadata is unobservable outside the Responses API.
+
 ## Benchmark
 
 Tested with the candy problem from [codex-candy-eval](https://github.com/haowang02/codex-candy-eval) — a reasoning depth test that triggers gpt-5.5 truncation. The correct answer is 21.
 
-The repo includes a streaming test script `scripts/candy_eval_cpa.py` that sends streaming Responses API requests to your CPA endpoint:
+The repo includes a multi-protocol test script `scripts/candy_eval.py` supporting `openai-response`, `openai-chat`, and `anthropic` client protocols with concurrent testing:
 
 **Command**:
 
 ```bash
-python3 scripts/candy_eval_cpa.py \
-  --url http://your-cpa:port/v1/responses \
-  --key YOUR_KEY -n 5 -r high
+python3 scripts/candy_eval.py \
+  --url http://your-cpa:port --key YOUR_KEY \
+  --protocol openai-response --rounds 5 -r high
 ```
 
 ### Without plugin (baseline)

@@ -191,8 +191,10 @@ class OpenAIChatAdapter(ProtocolAdapter):
         result.input_tokens = usage.get("prompt_tokens", 0)
         result.output_tokens = usage.get("completion_tokens", 0)
         result.reasoning_tokens = usage.get("completion_tokens_details", {}).get("reasoning_tokens", 0)
-        result.rounds = 1  # chat completions has no proxy_rounds metadata
-        result.stopped_reason = ""
+        # Chat completions protocol does not expose proxy metadata (proxy_rounds, proxy_stopped_reason)
+        # CPA's translation layer does not forward response.completed metadata to non-openai-response clients.
+        result.rounds = -1  # N/A — metadata not available in this protocol
+        result.stopped_reason = "N/A"
         result.ok = bool(ANSWER_PATTERN.search(text))
         result.answer_preview = text[:50].replace("\n", " ")
         return result
@@ -263,8 +265,10 @@ class AnthropicAdapter(ProtocolAdapter):
         result.input_tokens = usage.get("input_tokens", 0)
         result.output_tokens = usage.get("output_tokens", 0)
         result.reasoning_tokens = 0  # Claude format doesn't expose reasoning_tokens
-        result.rounds = 1
-        result.stopped_reason = ""
+        # Anthropic protocol does not expose proxy metadata (proxy_rounds, proxy_stopped_reason)
+        # CPA's translation layer does not forward response.completed metadata to non-openai-response clients.
+        result.rounds = -1  # N/A — metadata not available in this protocol
+        result.stopped_reason = "N/A"
         result.ok = bool(ANSWER_PATTERN.search(text))
         result.answer_preview = text[:50].replace("\n", " ")
         return result
@@ -369,10 +373,12 @@ def _print_row(r: RoundResult):
 
     tps = f"{r.output_tokens / r.elapsed:.1f}" if r.output_tokens and r.elapsed > 0 else "-"
     ok_str = "✓" if r.ok else "✗"
+    rounds_str = "N/A" if r.rounds < 0 else str(r.rounds)
+    stopped_str = "N/A" if r.stopped_reason == "N/A" else (r.stopped_reason or "-")
     print(f"{r.protocol:>14}  {r.round_no:>3}  {ok_str:^3}  "
           f"{r.input_tokens:>6}  {r.output_tokens:>6}  {r.reasoning_tokens:>6}  "
-          f"{r.elapsed:>6.1f}  {tps:>6}  {r.rounds:>6}  "
-          f"{r.stopped_reason or '-':>20}  {r.answer_preview}")
+          f"{r.elapsed:>6.1f}  {tps:>6}  {rounds_str:>6}  "
+          f"{stopped_str:>20}  {r.answer_preview}")
 
 
 def _print_header():

@@ -20,11 +20,10 @@ const (
 // foldConfig mirrors cpa-model-fallback-router's pluginConfig pattern:
 // yaml-tagged struct, decoded by yaml.Unmarshal, normalized and validated.
 type foldConfig struct {
-	MarkerText     string `yaml:"marker_text"`
-	TruncationStep int    `yaml:"truncation_step"`
-	MaxTierN       int    `yaml:"max_tier_n"`
-	MaxContinue    int    `yaml:"max_continue"`
-	DebugLog       bool   `yaml:"debug_log"`
+	MarkerText  string `yaml:"marker_text"`
+	MaxTierN    int    `yaml:"max_tier_n"`
+	MaxContinue int    `yaml:"max_continue"`
+	DebugLog    bool   `yaml:"debug_log"`
 }
 
 var globalFoldConfig atomic.Value
@@ -50,17 +49,16 @@ func applyLifecycleConfig(raw []byte) error {
 	}
 	setFoldConfig(cfg)
 	if cfg.DebugLog {
-		pluginLog("debug", fmt.Sprintf("config applied: truncation_step=%d max_tier_n=%d max_continue=%d marker_text_len=%d", cfg.TruncationStep, cfg.MaxTierN, cfg.MaxContinue, len(cfg.MarkerText)))
+		pluginLog("debug", fmt.Sprintf("config applied: max_tier_n=%d max_continue=%d marker_text_len=%d", cfg.MaxTierN, cfg.MaxContinue, len(cfg.MarkerText)))
 	}
 	return nil
 }
 
 func defaultFoldConfig() foldConfig {
 	return foldConfig{
-		MarkerText:     defaultMarkerText,
-		TruncationStep: defaultTruncationStep,
-		MaxTierN:       defaultMaxTierN,
-		MaxContinue:    defaultMaxContinue,
+		MarkerText:  defaultMarkerText,
+		MaxTierN:    defaultMaxTierN,
+		MaxContinue: defaultMaxContinue,
 	}
 }
 
@@ -102,9 +100,6 @@ func normalizeFoldConfig(cfg *foldConfig) {
 }
 
 func validateFoldConfig(cfg foldConfig) error {
-	if cfg.TruncationStep <= 0 {
-		return fmt.Errorf("truncation_step must be a positive integer")
-	}
 	if cfg.MaxTierN < 0 {
 		return fmt.Errorf("max_tier_n must be a non-negative integer")
 	}

@@ -67,6 +67,8 @@ import (
 
 const pluginIdentifier = "codexcomp"
 
+var pluginVersion = "dev"
+
 func main() {}
 
 //export cliproxy_plugin_init
@@ -184,7 +186,7 @@ func pluginRegistration() registration {
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             pluginIdentifier,
-			Version:          "0.1.0",
+			Version:          pluginVersion,
 			Author:           "uf-hy",
 			GitHubRepository: "https://github.com/uf-hy/cpa-plugin-codexcomp",
 			ConfigFields: []pluginapi.ConfigField{
@@ -201,12 +203,7 @@ func pluginRegistration() registration {
 				{
 					Name:        "max_tier_n",
 					Type:        pluginapi.ConfigFieldTypeInteger,
-					Description: "Largest step*n-2 truncation tier eligible for continuation, where step is the configured truncation_step. Defaults to 6. Set 0 for no upper tier limit.",
-				},
-				{
-					Name:        "truncation_step",
-					Type:        pluginapi.ConfigFieldTypeInteger,
-					Description: "Token step used to detect the step*n-2 truncation pattern. Defaults to 518.",
+					Description: "Largest 518n-2 truncation tier eligible for continuation. Defaults to 6. Set 0 for no upper tier limit.",
 				},
 				{
 					Name:        "debug_log",
