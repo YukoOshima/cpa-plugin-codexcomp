@@ -35,7 +35,7 @@ gpt-5.5 with high reasoning effort can take 25-30 seconds before the first SSE e
 
 The plugin only intercepts requests that match **all** of:
 
-- Model is `gpt-5.5`, `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-sol(ultra)`, `gpt-5.6-sol(max)`, `gpt-5.6-sol(xhigh)`, `gpt-5.6-terra`, or `gpt-5.6-luna`
+- Model is `gpt-5.5`, `gpt-5.6`, or any hyphenated `gpt-5.6-*` variant
 - Client protocol is `openai-response` (Responses API), `openai` (Chat Completions API), or `claude` (Anthropic Messages API)
 - Request is streaming (`stream: true`)
 - No `previous_response_id` present

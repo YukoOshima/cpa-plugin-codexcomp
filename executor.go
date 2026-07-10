@@ -52,19 +52,11 @@ const (
 )
 
 func supportsTruncationFold(model string) bool {
-	switch model {
-	case "gpt-5.5",
-		"gpt-5.6",
-		"gpt-5.6-sol",
-		"gpt-5.6-sol(ultra)",
-		"gpt-5.6-sol(max)",
-		"gpt-5.6-sol(xhigh)",
-		"gpt-5.6-terra",
-		"gpt-5.6-luna":
+	if model == "gpt-5.5" || model == "gpt-5.6" {
 		return true
-	default:
-		return false
 	}
+	const gpt56VariantPrefix = "gpt-5.6-"
+	return len(model) > len(gpt56VariantPrefix) && strings.HasPrefix(model, gpt56VariantPrefix)
 }
 
 func truncationFoldRouteReason(model string) string {

@@ -1279,8 +1279,9 @@ func TestSupportsTruncationFold(t *testing.T) {
 		{"gpt-5.6-sol(xhigh)", true},
 		{"gpt-5.6-terra", true},
 		{"gpt-5.6-luna", true},
+		{"gpt-5.6-preview", true},
+		{"gpt-5.6-future-model", true},
 		{"gpt-5.6-", false},
-		{"gpt-5.6-preview", false},
 		{"gpt-5.60", false},
 		{"gpt-5.6preview", false},
 		{"gpt-4o", false},
@@ -1342,7 +1343,7 @@ func TestRouteModelDeclinesNonMatching(t *testing.T) {
 	}{
 		{"wrong model", "gpt-4o", "openai-response", true},
 		{"lookalike model", "gpt-5.60", "openai-response", true},
-		{"unlisted variant", "gpt-5.6-preview", "openai-response", true},
+		{"missing separator", "gpt-5.6preview", "openai-response", true},
 		{"empty variant", "gpt-5.6-", "openai-response", true},
 		{"unsupported format", "gpt-5.5", "gemini", true},
 		{"non-stream", "gpt-5.5", "openai-response", false},
@@ -1411,6 +1412,7 @@ func TestRouteModelAcceptsGPT56Family(t *testing.T) {
 		"gpt-5.6-sol(xhigh)",
 		"gpt-5.6-terra",
 		"gpt-5.6-luna",
+		"gpt-5.6-preview",
 	}
 	for _, model := range models {
 		t.Run(model, func(t *testing.T) {
