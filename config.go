@@ -13,7 +13,7 @@ const defaultMarkerText = "Continue thinking..."
 
 const (
 	defaultTruncationStep = 518
-	defaultMaxTierN       = 6
+	defaultMaxTierN       = 11
 	defaultMaxContinue    = 3
 )
 

@@ -5,9 +5,9 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin that detects and repairs gpt-5.5 reasoning truncation in streaming requests to reduce occasional model degradation, supporting OpenAI Responses API, OpenAI Chat Completions API, and Anthropic Messages API client protocols
+A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin that detects and repairs gpt-5.5 and supported gpt-5.6 reasoning truncation in streaming requests to reduce occasional model degradation, supporting OpenAI Responses API, OpenAI Chat Completions API, and Anthropic Messages API client protocols
 
-In agent scenarios, gpt-5.5 reasoning tokens can stop exactly at 518n−2 (516, 1034, 1552, ...). This truncation can cause unexpected degradation. When the plugin detects this kind of truncation, it replays encrypted_content to continue reasoning, then folds multiple rounds into a single response that stays fully transparent to the downstream client.
+In agent scenarios, gpt-5.5 and gpt-5.6 reasoning tokens can stop exactly at 518n−2 (516, 1034, 1552, ...). This truncation can cause unexpected degradation. When the plugin detects this kind of truncation, it replays encrypted_content to continue reasoning, then folds multiple rounds into a single response that stays fully transparent to the downstream client.
 
 ## Quick Install (Agent)
 
@@ -21,7 +21,7 @@ For manual installation by humans, see [Installation](#installation).
 
 ## How It Works
 
-The plugin intercepts gpt-5.5 streaming requests through CPA's C ABI plugin system, communicating with the upstream in codex format internally. Each time the upstream request finishes, it checks whether reasoning_tokens matches the 518n−2 pattern. If it matches and encrypted_content exists, it triggers continuation
+The plugin intercepts supported gpt-5.5 and gpt-5.6 streaming requests through CPA's C ABI plugin system, communicating with the upstream in codex format internally. Each time the upstream request finishes, it checks whether reasoning_tokens matches the 518n−2 pattern. If it matches and encrypted_content exists, it triggers continuation
 
 The continuation round replays the original input, all previous thinking content, and a prompt message so the model continues from the truncation point rather than starting over
 
@@ -35,7 +35,7 @@ gpt-5.5 with high reasoning effort can take 25-30 seconds before the first SSE e
 
 The plugin only intercepts requests that match **all** of:
 
-- Model is `gpt-5.5`
+- Model is `gpt-5.5`, `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-sol(ultra)`, `gpt-5.6-sol(max)`, `gpt-5.6-sol(xhigh)`, `gpt-5.6-terra`, or `gpt-5.6-luna`
 - Client protocol is `openai-response` (Responses API), `openai` (Chat Completions API), or `claude` (Anthropic Messages API)
 - Request is streaming (`stream: true`)
 - No `previous_response_id` present
@@ -128,7 +128,7 @@ plugins:
     codexcomp:
       marker_text: "Continue thinking..."
       max_continue: 3
-      max_tier_n: 6
+      max_tier_n: 11
       debug_log: false
 ```
 
@@ -136,7 +136,7 @@ plugins:
 
 `max_continue` is the maximum number of continuation rounds. It defaults to 3. Set it to 0 to temporarily disable continuation while keeping routing and metadata visible for comparisons.
 
-`max_tier_n` is the largest truncation tier eligible for continuation. It defaults to 6. Set it to 0 to remove the upper tier limit.
+`max_tier_n` is the largest truncation tier eligible for continuation. It defaults to 11. Set it to 0 to remove the upper tier limit.
 
 `debug_log` emits configuration and continuation-round details through CPA host log. It defaults to false and is intended for troubleshooting.
 

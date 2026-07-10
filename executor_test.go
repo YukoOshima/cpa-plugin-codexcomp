@@ -41,6 +41,7 @@ func TestTierN(t *testing.T) {
 	}{
 		{516, intPtr(1)}, {1034, intPtr(2)}, {1552, intPtr(3)},
 		{2070, intPtr(4)}, {2588, intPtr(5)}, {3106, intPtr(6)},
+		{4142, intPtr(8)},
 		{515, nil}, {517, nil}, {0, nil}, {1000, nil},
 	}
 	for _, tt := range tests {
@@ -59,11 +60,11 @@ func TestInContinueWindow(t *testing.T) {
 	if !inContinueWindow(intPtr(1), defaultMaxTierN) {
 		t.Error("n=1 should be in window")
 	}
-	if !inContinueWindow(intPtr(6), defaultMaxTierN) {
-		t.Error("n=6 should be in window")
+	if !inContinueWindow(intPtr(11), defaultMaxTierN) {
+		t.Error("n=11 should be in window")
 	}
-	if inContinueWindow(intPtr(7), defaultMaxTierN) {
-		t.Error("n=7 should not be in window")
+	if inContinueWindow(intPtr(12), defaultMaxTierN) {
+		t.Error("n=12 should not be in window")
 	}
 	if inContinueWindow(nil, defaultMaxTierN) {
 		t.Error("nil should not be in window")
@@ -249,9 +250,9 @@ func TestStoppedReason(t *testing.T) {
 	}
 
 	fs.roundNo = 1
-	fs.usage = map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": float64(3624)}}
+	fs.usage = map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": float64(6214)}}
 	if fs.stoppedReason() != "tier_out_of_window" {
-		t.Errorf("got %s, want tier_out_of_window (n=7)", fs.stoppedReason())
+		t.Errorf("got %s, want tier_out_of_window (n=12)", fs.stoppedReason())
 	}
 
 	fs.usage = map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": float64(100)}}
@@ -1265,6 +1266,34 @@ func TestMidStreamError(t *testing.T) {
 	}
 }
 
+func TestSupportsTruncationFold(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{"gpt-5.5", true},
+		{"gpt-5.6", true},
+		{"gpt-5.6-sol", true},
+		{"gpt-5.6-sol(ultra)", true},
+		{"gpt-5.6-sol(max)", true},
+		{"gpt-5.6-sol(xhigh)", true},
+		{"gpt-5.6-terra", true},
+		{"gpt-5.6-luna", true},
+		{"gpt-5.6-", false},
+		{"gpt-5.6-preview", false},
+		{"gpt-5.60", false},
+		{"gpt-5.6preview", false},
+		{"gpt-4o", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			if got := supportsTruncationFold(tt.model); got != tt.want {
+				t.Errorf("supportsTruncationFold(%q) = %t, want %t", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRouteModelDeclines(t *testing.T) {
 	tests := []struct {
 		name, body string
@@ -1312,6 +1341,9 @@ func TestRouteModelDeclinesNonMatching(t *testing.T) {
 		stream              bool
 	}{
 		{"wrong model", "gpt-4o", "openai-response", true},
+		{"lookalike model", "gpt-5.60", "openai-response", true},
+		{"unlisted variant", "gpt-5.6-preview", "openai-response", true},
+		{"empty variant", "gpt-5.6-", "openai-response", true},
 		{"unsupported format", "gpt-5.5", "gemini", true},
 		{"non-stream", "gpt-5.5", "openai-response", false},
 	}
@@ -1365,8 +1397,49 @@ func TestRouteModelAccepts(t *testing.T) {
 	if resp.Data.TargetKind != pluginapi.ModelRouteTargetSelf {
 		t.Error("should target self")
 	}
-	if resp.Data.Reason != "codexcomp_gpt55_truncation_fold" {
-		t.Error("reason mismatch")
+	if resp.Data.Reason != gpt55TruncationFoldRouteReason {
+		t.Errorf("reason = %q, want legacy value %q", resp.Data.Reason, gpt55TruncationFoldRouteReason)
+	}
+}
+
+func TestRouteModelAcceptsGPT56Family(t *testing.T) {
+	models := []string{
+		"gpt-5.6",
+		"gpt-5.6-sol",
+		"gpt-5.6-sol(ultra)",
+		"gpt-5.6-sol(max)",
+		"gpt-5.6-sol(xhigh)",
+		"gpt-5.6-terra",
+		"gpt-5.6-luna",
+	}
+	for _, model := range models {
+		t.Run(model, func(t *testing.T) {
+			body := `{"model":"` + model + `","stream":true,"input":[]}`
+			req := rpcModelRouteRequest{
+				ModelRouteRequest: pluginapi.ModelRouteRequest{
+					RequestedModel: model, SourceFormat: "openai-response",
+					Stream: true, Body: []byte(body),
+				},
+			}
+			raw, _ := json.Marshal(req)
+			result, err := routeModel(raw)
+			if err != nil {
+				t.Fatalf("error: %v", err)
+			}
+			var resp struct {
+				OK   bool                         `json:"ok"`
+				Data pluginapi.ModelRouteResponse `json:"result"`
+			}
+			if err := json.Unmarshal(result, &resp); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if !resp.OK || !resp.Data.Handled {
+				t.Fatalf("should accept %s: %+v", model, resp)
+			}
+			if resp.Data.Reason != gpt56TruncationFoldRouteReason {
+				t.Errorf("reason = %q, want %q", resp.Data.Reason, gpt56TruncationFoldRouteReason)
+			}
+		})
 	}
 }
 

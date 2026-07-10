@@ -203,7 +203,7 @@ func pluginRegistration() registration {
 				{
 					Name:        "max_tier_n",
 					Type:        pluginapi.ConfigFieldTypeInteger,
-					Description: "Largest 518n-2 truncation tier eligible for continuation. Defaults to 6. Set 0 for no upper tier limit.",
+					Description: "Largest 518n-2 truncation tier eligible for continuation. Defaults to 11. Set 0 for no upper tier limit.",
 				},
 				{
 					Name:        "debug_log",

@@ -46,6 +46,34 @@ var sessionHeaders = []string{
 	claudeCodeSessionHeader,
 }
 
+const (
+	gpt55TruncationFoldRouteReason = "codexcomp_gpt55_truncation_fold"
+	gpt56TruncationFoldRouteReason = "codexcomp_gpt56_truncation_fold"
+)
+
+func supportsTruncationFold(model string) bool {
+	switch model {
+	case "gpt-5.5",
+		"gpt-5.6",
+		"gpt-5.6-sol",
+		"gpt-5.6-sol(ultra)",
+		"gpt-5.6-sol(max)",
+		"gpt-5.6-sol(xhigh)",
+		"gpt-5.6-terra",
+		"gpt-5.6-luna":
+		return true
+	default:
+		return false
+	}
+}
+
+func truncationFoldRouteReason(model string) string {
+	if model == "gpt-5.5" {
+		return gpt55TruncationFoldRouteReason
+	}
+	return gpt56TruncationFoldRouteReason
+}
+
 func extractSessionID(req rpcExecutorRequest) string {
 	for _, header := range sessionHeaders {
 		if sid := strings.TrimSpace(req.Headers.Get(header)); sid != "" {
@@ -123,7 +151,7 @@ func routeModel(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("decode model.route request: %w", err)
 	}
 
-	if req.RequestedModel != "gpt-5.5" {
+	if !supportsTruncationFold(req.RequestedModel) {
 		return okEnvelope(pluginapi.ModelRouteResponse{Handled: false})
 	}
 	switch req.SourceFormat {
@@ -158,7 +186,7 @@ func routeModel(raw []byte) ([]byte, error) {
 	return okEnvelope(pluginapi.ModelRouteResponse{
 		Handled:    true,
 		TargetKind: pluginapi.ModelRouteTargetSelf,
-		Reason:     "codexcomp_gpt55_truncation_fold",
+		Reason:     truncationFoldRouteReason(req.RequestedModel),
 	})
 }
 

@@ -73,8 +73,8 @@ plugins:
       # marker_text: "Continue thinking..."
       # 可选：最多续写轮数。默认 3；设为 0 可临时禁用续写做 A/B 对比。
       # max_continue: 3
-      # 可选：最大截断层级。默认 6；设为 0 表示不限制上限。
-      # max_tier_n: 6
+      # 可选：最大截断层级。默认 11；设为 0 表示不限制上限。
+      # max_tier_n: 11
       # 可选：输出调试日志到 CPA host log。默认 false，排障时再开。
       # debug_log: false
 ```
