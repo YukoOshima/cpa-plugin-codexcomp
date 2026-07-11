@@ -206,6 +206,21 @@ func pluginRegistration() registration {
 					Description: "Largest 518n-2 truncation tier eligible for continuation. Defaults to 11. Set 0 for no upper tier limit.",
 				},
 				{
+					Name:        "max_startup_retries",
+					Type:        pluginapi.ConfigFieldTypeInteger,
+					Description: "Maximum transient upstream retries before the first downstream event. Defaults to 3. Set 0 to disable.",
+				},
+				{
+					Name:        "retry_initial_backoff_ms",
+					Type:        pluginapi.ConfigFieldTypeInteger,
+					Description: "Initial upstream startup retry backoff in milliseconds. Defaults to 500.",
+				},
+				{
+					Name:        "retry_max_backoff_ms",
+					Type:        pluginapi.ConfigFieldTypeInteger,
+					Description: "Maximum upstream startup retry backoff in milliseconds. Defaults to 2000.",
+				},
+				{
 					Name:        "debug_log",
 					Type:        pluginapi.ConfigFieldTypeBoolean,
 					Description: "Enable debug logs through CPA host logging. Defaults to false.",

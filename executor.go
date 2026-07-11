@@ -3,9 +3,13 @@ package main
 import (
 	"crypto/sha1"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -295,16 +299,16 @@ func runFold(baseBody map[string]any, origInput []any, req rpcExecutorRequest, s
 				fev = fs.incompleteEvent("upstream_error")
 			}
 			fs.stamp(fev)
-			_ = emitChunk(streamID, sseEvent(fev))
-			_ = emitDone(streamID)
+			_ = fs.emitChunk(streamID, sseEvent(fev))
+			_ = fs.emitDone(streamID)
 			return
 		}
 
 		if terminal == nil {
 			iev := fs.incompleteEvent("upstream_eof")
 			fs.stamp(iev)
-			_ = emitChunk(streamID, sseEvent(iev))
-			_ = emitDone(streamID)
+			_ = fs.emitChunk(streamID, sseEvent(iev))
+			_ = fs.emitDone(streamID)
 			return
 		}
 
@@ -317,21 +321,17 @@ func runFold(baseBody map[string]any, origInput []any, req rpcExecutorRequest, s
 		}
 
 		if err := fs.flushCleanStop(streamID); err != nil {
-			_ = emitDone(streamID)
+			_ = fs.emitDone(streamID)
 			return
 		}
 		ev := fs.terminalEvent()
 		fs.stamp(ev)
-		if err := emitChunk(streamID, sseEvent(ev)); err != nil {
+		if err := fs.emitChunk(streamID, sseEvent(ev)); err != nil {
 			return
 		}
-		_ = emitDone(streamID)
+		_ = fs.emitDone(streamID)
 		return
 	}
-}
-
-func emitDone(streamID string) error {
-	return emitChunk(streamID, []byte("data: [DONE]\n\n"))
 }
 
 type upstreamError struct {
@@ -341,9 +341,20 @@ type upstreamError struct {
 
 func (e *upstreamError) Error() string { return e.msg }
 
-type midStreamError struct{ msg string }
+type midStreamError struct {
+	msg   string
+	cause error
+}
 
 func (e *midStreamError) Error() string { return e.msg }
+
+func (e *midStreamError) Unwrap() error { return e.cause }
+
+type downstreamEmitError struct{ cause error }
+
+func (e *downstreamEmitError) Error() string { return e.cause.Error() }
+
+func (e *downstreamEmitError) Unwrap() error { return e.cause }
 
 func sseEvent(ev map[string]any) []byte {
 	raw, _ := json.Marshal(ev)
@@ -375,7 +386,16 @@ type foldState struct {
 
 	sseBuffer []byte
 	config    foldConfig
+
+	downstreamStarted bool
+	hostCall          hostCallFunc
+	streamEmit        streamEmitFunc
+	sleep             sleepFunc
 }
+
+type hostCallFunc func(method string, payload any) (json.RawMessage, error)
+type streamEmitFunc func(streamID string, payload []byte) error
+type sleepFunc func(time.Duration)
 
 type bufferedEntry struct {
 	oi     int
@@ -393,11 +413,43 @@ func newFoldState(baseBody map[string]any, origInput []any, req rpcExecutorReque
 		kind:           map[int]string{},
 		oiToDS:         map[int]int{},
 		config:         currentFoldConfig(),
+		hostCall:       callHost,
+		streamEmit:     emitChunk,
+		sleep:          time.Sleep,
 	}
 }
 
 func (fs *foldState) openRound(streamID string) (map[string]any, map[string]any, http.Header, error) {
 	fs.roundNo++
+	retries := 0
+	for {
+		fs.resetRoundAttempt()
+		terminal, usage, headers, roundErr := fs.openRoundAttempt(streamID)
+		retryCause := roundErr
+		if retryCause == nil {
+			retryCause = terminalFailureError(terminal)
+		}
+		if retryCause == nil ||
+			fs.downstreamStarted ||
+			retries >= fs.config.MaxStartupRetries ||
+			!isTransientStartupError(retryCause) {
+			return terminal, usage, headers, roundErr
+		}
+
+		delay := retryBackoff(fs.config, retries)
+		retries++
+		fs.debugf(
+			"retrying transient upstream startup failure retry=%d/%d delay=%s error=%v",
+			retries,
+			fs.config.MaxStartupRetries,
+			delay,
+			retryCause,
+		)
+		fs.sleepFor(delay)
+	}
+}
+
+func (fs *foldState) resetRoundAttempt() {
 	fs.roundReasoning = nil
 	fs.kind = map[int]string{}
 	fs.oiToDS = map[int]int{}
@@ -405,7 +457,9 @@ func (fs *foldState) openRound(streamID string) (map[string]any, map[string]any,
 	fs.terminal = nil
 	fs.usage = nil
 	fs.sseBuffer = nil
+}
 
+func (fs *foldState) openRoundAttempt(streamID string) (map[string]any, map[string]any, http.Header, error) {
 	var bodyBytes []byte
 	var err error
 	bodyBytes, err = json.Marshal(nextRoundBody(fs.baseBody, append(fs.origInput, fs.replayTail...)))
@@ -418,7 +472,7 @@ func (fs *foldState) openRound(streamID string) (map[string]any, map[string]any,
 		entryProtocol = "openai-response"
 	}
 
-	result, err := callHost(pluginabi.MethodHostModelExecuteStream, hostModelExecRequest{
+	result, err := fs.callHostMethod(pluginabi.MethodHostModelExecuteStream, hostModelExecRequest{
 		EntryProtocol:  entryProtocol,
 		ExitProtocol:   "codex",
 		Model:          fs.req.Model,
@@ -439,7 +493,7 @@ func (fs *foldState) openRound(streamID string) (map[string]any, map[string]any,
 	}
 	if streamResp.StatusCode >= 400 {
 		if streamResp.StreamID != "" {
-			_, _ = callHost(pluginabi.MethodHostModelStreamClose, map[string]any{"stream_id": streamResp.StreamID})
+			_, _ = fs.callHostMethod(pluginabi.MethodHostModelStreamClose, map[string]any{"stream_id": streamResp.StreamID})
 		}
 		return nil, nil, nil, &upstreamError{status: streamResp.StatusCode, msg: fmt.Sprintf("upstream returned status %d", streamResp.StatusCode)}
 	}
@@ -447,22 +501,22 @@ func (fs *foldState) openRound(streamID string) (map[string]any, map[string]any,
 		return nil, nil, nil, fmt.Errorf("host.model.execute_stream returned empty stream_id")
 	}
 	defer func() {
-		_, _ = callHost(pluginabi.MethodHostModelStreamClose, map[string]any{"stream_id": streamResp.StreamID})
+		_, _ = fs.callHostMethod(pluginabi.MethodHostModelStreamClose, map[string]any{"stream_id": streamResp.StreamID})
 	}()
 
 	for {
-		readResult, err := callHost(pluginabi.MethodHostModelStreamRead, map[string]any{"stream_id": streamResp.StreamID})
+		readResult, err := fs.callHostMethod(pluginabi.MethodHostModelStreamRead, map[string]any{"stream_id": streamResp.StreamID})
 		if err != nil {
-			return nil, nil, streamResp.Headers, &midStreamError{msg: err.Error()}
+			return nil, nil, streamResp.Headers, &midStreamError{msg: err.Error(), cause: err}
 		}
 		var readResp hostModelStreamReadResponse
 		if err := json.Unmarshal(readResult, &readResp); err != nil {
-			return nil, nil, streamResp.Headers, &midStreamError{msg: err.Error()}
+			return nil, nil, streamResp.Headers, &midStreamError{msg: err.Error(), cause: err}
 		}
 		if len(readResp.Payload) > 0 {
 			term, perr := fs.processAndEmit(readResp.Payload, streamID)
 			if perr != nil {
-				return nil, nil, streamResp.Headers, &midStreamError{msg: perr.Error()}
+				return nil, nil, streamResp.Headers, &midStreamError{msg: perr.Error(), cause: perr}
 			}
 			if term != nil {
 				return fs.terminal, fs.usage, streamResp.Headers, nil
@@ -474,6 +528,178 @@ func (fs *foldState) openRound(streamID string) (map[string]any, map[string]any,
 		if readResp.Done {
 			return fs.terminal, fs.usage, streamResp.Headers, nil
 		}
+	}
+}
+
+func (fs *foldState) callHostMethod(method string, payload any) (json.RawMessage, error) {
+	if fs.hostCall != nil {
+		return fs.hostCall(method, payload)
+	}
+	return callHost(method, payload)
+}
+
+func (fs *foldState) emitChunk(streamID string, payload []byte) error {
+	emitter := fs.streamEmit
+	if emitter == nil {
+		emitter = emitChunk
+	}
+	if err := emitter(streamID, payload); err != nil {
+		return &downstreamEmitError{cause: err}
+	}
+	if streamID != "" && len(payload) > 0 {
+		fs.downstreamStarted = true
+	}
+	return nil
+}
+
+func (fs *foldState) emitDone(streamID string) error {
+	return fs.emitChunk(streamID, []byte("data: [DONE]\n\n"))
+}
+
+func (fs *foldState) sleepFor(delay time.Duration) {
+	if delay <= 0 {
+		return
+	}
+	if fs.sleep != nil {
+		fs.sleep(delay)
+		return
+	}
+	time.Sleep(delay)
+}
+
+func retryBackoff(cfg foldConfig, retryIndex int) time.Duration {
+	delay := time.Duration(cfg.RetryInitialBackoffMS) * time.Millisecond
+	maximum := time.Duration(cfg.RetryMaxBackoffMS) * time.Millisecond
+	if delay <= 0 || maximum <= 0 {
+		return 0
+	}
+	if delay >= maximum {
+		return maximum
+	}
+	for i := 0; i < retryIndex; i++ {
+		if delay >= maximum/2 {
+			return maximum
+		}
+		delay *= 2
+	}
+	if delay > maximum {
+		return maximum
+	}
+	return delay
+}
+
+var transientHTTPStatusPattern = regexp.MustCompile(`(?i)(?:\bstatus(?:_code)?\b|\bcode\b|\bupstream\b|\bhttp\b)[^0-9]{0,16}(?:502|503|504)\b`)
+
+func isTransientStartupError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var emitErr *downstreamEmitError
+	if errors.As(err, &emitErr) {
+		return false
+	}
+	var upstreamErr *upstreamError
+	if errors.As(err, &upstreamErr) {
+		switch upstreamErr.status {
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return true
+		}
+	}
+
+	message := strings.ToLower(err.Error())
+	if transientHTTPStatusPattern.MatchString(message) {
+		return true
+	}
+	for _, phrase := range []string{
+		"connection refused",
+		"econnrefused",
+		"connection reset",
+		"econnreset",
+		"temporarily unavailable",
+		"temporary unavailable",
+		"service unavailable",
+		"failed to validate api key",
+		"bad gateway",
+		"gateway timeout",
+	} {
+		if strings.Contains(message, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func terminalFailureError(terminal map[string]any) error {
+	if terminal == nil || terminal["type"] != "response.failed" {
+		return nil
+	}
+
+	response, _ := terminal["response"].(map[string]any)
+	errorValue := terminal["error"]
+	if response != nil && response["error"] != nil {
+		errorValue = response["error"]
+	}
+	errorMap, _ := errorValue.(map[string]any)
+
+	status := 0
+	for _, value := range []any{
+		valueFromMap(errorMap, "status_code"),
+		valueFromMap(errorMap, "code"),
+		valueFromMap(response, "status_code"),
+		terminal["status_code"],
+	} {
+		if parsed, ok := statusCode(value); ok {
+			status = parsed
+			break
+		}
+	}
+
+	detail := stringFromMap(errorMap, "message")
+	if detail == "" {
+		detail = stringFromMap(response, "message")
+	}
+	if detail == "" {
+		detail = stringFromMap(terminal, "message")
+	}
+	if detail == "" && errorValue != nil {
+		if raw, err := json.Marshal(errorValue); err == nil {
+			detail = string(raw)
+		}
+	}
+	if detail == "" {
+		detail = "upstream response.failed"
+	}
+	return &upstreamError{status: status, msg: detail}
+}
+
+func valueFromMap(values map[string]any, key string) any {
+	if values == nil {
+		return nil
+	}
+	return values[key]
+}
+
+func stringFromMap(values map[string]any, key string) string {
+	value, _ := valueFromMap(values, key).(string)
+	return strings.TrimSpace(value)
+}
+
+func statusCode(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, typed > 0
+	case int64:
+		return int(typed), typed > 0
+	case float64:
+		return int(typed), typed > 0 && typed == float64(int(typed))
+	case json.Number:
+		parsed, err := strconv.Atoi(string(typed))
+		return parsed, err == nil && parsed > 0
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+		return parsed, err == nil && parsed > 0
+	default:
+		return 0, false
 	}
 }
 
@@ -599,7 +825,7 @@ func (fs *foldState) processEvent(ev map[string]any, streamID string) (map[strin
 				}
 			}
 			fs.stamp(ev)
-			if err := emitChunk(streamID, sseEvent(ev)); err != nil {
+			if err := fs.emitChunk(streamID, sseEvent(ev)); err != nil {
 				return nil, err
 			}
 		}
@@ -633,7 +859,7 @@ func (fs *foldState) processEvent(ev map[string]any, streamID string) (map[strin
 			ev["output_index"] = fs.dsOI
 			fs.dsOI++
 			fs.stamp(ev)
-			if err := emitChunk(streamID, sseEvent(ev)); err != nil {
+			if err := fs.emitChunk(streamID, sseEvent(ev)); err != nil {
 				return nil, err
 			}
 		} else {
@@ -655,7 +881,7 @@ func (fs *foldState) processEvent(ev map[string]any, streamID string) (map[strin
 			}
 		}
 		fs.stamp(ev)
-		if err := emitChunk(streamID, sseEvent(ev)); err != nil {
+		if err := fs.emitChunk(streamID, sseEvent(ev)); err != nil {
 			return nil, err
 		}
 	} else if k == "buffered" {
@@ -672,7 +898,7 @@ func (fs *foldState) processEvent(ev map[string]any, streamID string) (map[strin
 		}
 	} else {
 		fs.stamp(ev)
-		if err := emitChunk(streamID, sseEvent(ev)); err != nil {
+		if err := fs.emitChunk(streamID, sseEvent(ev)); err != nil {
 			return nil, err
 		}
 	}
@@ -779,7 +1005,7 @@ func (fs *foldState) flushCleanStop(streamID string) error {
 				ev["output_index"] = fs.dsOI
 			}
 			fs.stamp(ev)
-			if err := emitChunk(streamID, sseEvent(ev)); err != nil {
+			if err := fs.emitChunk(streamID, sseEvent(ev)); err != nil {
 				return err
 			}
 		}

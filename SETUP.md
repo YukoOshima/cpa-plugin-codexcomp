@@ -75,6 +75,10 @@ plugins:
       # max_continue: 3
       # 可选：最大截断层级。默认 11；设为 0 表示不限制上限。
       # max_tier_n: 11
+      # 可选：首个下游事件前的瞬时上游失败重试。默认 3 次，设为 0 可禁用。
+      # max_startup_retries: 3
+      # retry_initial_backoff_ms: 500
+      # retry_max_backoff_ms: 2000
       # 可选：输出调试日志到 CPA host log。默认 false，排障时再开。
       # debug_log: false
 ```

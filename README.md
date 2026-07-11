@@ -130,6 +130,9 @@ plugins:
       marker_text: "Continue thinking..."
       max_continue: 3
       max_tier_n: 11
+      max_startup_retries: 3
+      retry_initial_backoff_ms: 500
+      retry_max_backoff_ms: 2000
       debug_log: false
 ```
 
@@ -138,6 +141,8 @@ plugins:
 `max_continue` 是最多续写轮数，默认 3；设为 0 可以临时禁用续写，只保留接管和元数据路径，方便对比。
 
 `max_tier_n` 是允许续写的最大截断层级，默认 11；设为 0 表示不限制上限。
+
+插件只会在尚未向客户端发送任何 SSE 事件时重试瞬时上游故障，包括 502/503/504、连接拒绝或重置、服务暂时不可用，以及上游启动窗口中的 API key 校验失败。一旦已成功发送事件，就不会重放请求，避免重复输出或工具调用。`max_startup_retries` 默认 3 次（不含首次请求），设为 0 可禁用；退避默认依次为 500ms、1s、2s，并受 `retry_max_backoff_ms` 限制。
 
 `debug_log` 会通过 CPA 的 host log（宿主日志）输出配置和续写轮次信息，默认关闭，排障时再开。
 

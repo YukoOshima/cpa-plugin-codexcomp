@@ -129,6 +129,9 @@ plugins:
       marker_text: "Continue thinking..."
       max_continue: 3
       max_tier_n: 11
+      max_startup_retries: 3
+      retry_initial_backoff_ms: 500
+      retry_max_backoff_ms: 2000
       debug_log: false
 ```
 
@@ -137,6 +140,8 @@ plugins:
 `max_continue` is the maximum number of continuation rounds. It defaults to 3. Set it to 0 to temporarily disable continuation while keeping routing and metadata visible for comparisons.
 
 `max_tier_n` is the largest truncation tier eligible for continuation. It defaults to 11. Set it to 0 to remove the upper tier limit.
+
+The plugin retries transient upstream startup failures only before it has emitted any SSE event to the client. Retryable failures include 502/503/504, connection refused or reset, temporary service unavailability, and API-key validation failures during an upstream startup window. Once an event has been emitted, the request is never replayed. `max_startup_retries` defaults to 3 retries after the initial request; the default backoff sequence is 500ms, 1s, and 2s, capped by `retry_max_backoff_ms`.
 
 `debug_log` emits configuration and continuation-round details through CPA host log. It defaults to false and is intended for troubleshooting.
 

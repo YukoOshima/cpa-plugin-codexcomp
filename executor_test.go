@@ -519,7 +519,7 @@ func TestApplyLifecycleConfig(t *testing.T) {
 	previous := currentFoldConfig()
 	defer setFoldConfig(previous)
 
-	payload, err := json.Marshal(lifecycleRequest{ConfigYAML: []byte("marker_text: Custom marker\nmax_continue: 5\nmax_tier_n: 8\ndebug_log: true")})
+	payload, err := json.Marshal(lifecycleRequest{ConfigYAML: []byte("marker_text: Custom marker\nmax_continue: 5\nmax_tier_n: 8\nmax_startup_retries: 4\nretry_initial_backoff_ms: 250\nretry_max_backoff_ms: 1500\ndebug_log: true")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,6 +535,15 @@ func TestApplyLifecycleConfig(t *testing.T) {
 	}
 	if cfg.MaxTierN != 8 {
 		t.Errorf("MaxTierN = %d", cfg.MaxTierN)
+	}
+	if cfg.MaxStartupRetries != 4 {
+		t.Errorf("MaxStartupRetries = %d", cfg.MaxStartupRetries)
+	}
+	if cfg.RetryInitialBackoffMS != 250 {
+		t.Errorf("RetryInitialBackoffMS = %d", cfg.RetryInitialBackoffMS)
+	}
+	if cfg.RetryMaxBackoffMS != 1500 {
+		t.Errorf("RetryMaxBackoffMS = %d", cfg.RetryMaxBackoffMS)
 	}
 	if !cfg.DebugLog {
 		t.Error("DebugLog should be true")
@@ -556,11 +565,11 @@ func TestApplyLifecycleConfigEmptyRawInstallsDefaults(t *testing.T) {
 }
 
 func TestDecodeFoldConfigFromJSON(t *testing.T) {
-	cfg, err := decodeFoldConfig([]byte(`{"marker_text":"JSON marker","max_continue":2,"max_tier_n":0,"debug_log":true}`))
+	cfg, err := decodeFoldConfig([]byte(`{"marker_text":"JSON marker","max_continue":2,"max_tier_n":0,"max_startup_retries":1,"retry_initial_backoff_ms":100,"retry_max_backoff_ms":500,"debug_log":true}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.MarkerText != "JSON marker" || cfg.MaxContinue != 2 || cfg.MaxTierN != 0 || !cfg.DebugLog {
+	if cfg.MarkerText != "JSON marker" || cfg.MaxContinue != 2 || cfg.MaxTierN != 0 || cfg.MaxStartupRetries != 1 || cfg.RetryInitialBackoffMS != 100 || cfg.RetryMaxBackoffMS != 500 || !cfg.DebugLog {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 }
@@ -569,6 +578,10 @@ func TestDecodeFoldConfigRejectsInvalidValues(t *testing.T) {
 	for _, raw := range [][]byte{
 		[]byte("max_continue: -1"),
 		[]byte("max_tier_n: nope"),
+		[]byte("max_startup_retries: -1"),
+		[]byte("retry_initial_backoff_ms: 0"),
+		[]byte("retry_max_backoff_ms: 0"),
+		[]byte("retry_initial_backoff_ms: 1000\nretry_max_backoff_ms: 500"),
 		[]byte("debug_log: maybe"),
 	} {
 		if _, err := decodeFoldConfig(raw); err == nil {
